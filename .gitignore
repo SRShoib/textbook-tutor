@@ -1,0 +1,29 @@
+# data that should not be committed
+data/style_guide/videos/*
+!data/style_guide/videos/.gitkeep
+data/textbook/*.pdf
+data/style_guide/teacher_guide/*.pdf
+.llm_cache/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.env
+*.egg-info/
+
+# node
+node_modules/
+.next/
+
+# db
+*.db
+postgres_data/
+
+# os
+.DS_Store
+Thumbs.db
+
+# local tooling, not pushed
+.claude/
+CLAUDE.md
