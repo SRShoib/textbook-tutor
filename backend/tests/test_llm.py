@@ -196,6 +196,30 @@ def test_call_llm_missing_openai_model_raises_before_any_network_call(monkeypatc
     assert calls == []  # never got as far as building a client
 
 
+def test_call_llm_model_override_bypasses_provider_default(monkeypatch):
+    # style_check.py's judge passes model=settings.openai_judge_model so the
+    # judge call never uses the main model, and never requires openai_model
+    # to be set at all.
+    llm.get_settings().openai_model = None
+    fake_client = FakeClient("verdict")
+    monkeypatch.setattr(llm, "_client_for", lambda provider: fake_client)
+
+    result = llm.call_llm("q", prompt_version="v1_style_judge", model="gpt-judge")
+
+    assert result.model == "gpt-judge"
+    assert fake_client.completions.calls[0]["model"] == "gpt-judge"
+
+
+def test_call_llm_model_override_changes_the_cache_key(monkeypatch):
+    fake_client = FakeClient("answer")
+    monkeypatch.setattr(llm, "_client_for", lambda provider: fake_client)
+
+    llm.call_llm("q", prompt_version="v1_style_judge", model="gpt-a")
+    llm.call_llm("q", prompt_version="v1_style_judge", model="gpt-b")
+
+    assert len(fake_client.completions.calls) == 2  # different cache entries
+
+
 # --- stats -----------------------------------------------------------------
 
 

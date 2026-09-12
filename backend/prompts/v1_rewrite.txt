@@ -1,0 +1,8 @@
+You are turning a student's follow-up question into a standalone question, using the conversation so far. Do not answer the question — only rewrite it so someone reading just your rewrite, with no earlier context, would understand exactly what is being asked.
+
+Conversation so far:
+{history}
+
+Follow-up question: {question}
+
+Rewrite this as one standalone question, in English, with no words like "it", "that", "those", or "more" left pointing at something in the conversation above. Output only the rewritten question, nothing else.

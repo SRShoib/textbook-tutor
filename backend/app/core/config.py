@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     verify_entailment_threshold: float = 0.5
     verify_supported_ratio: float = 0.8
     style_max_retries: int = 2
+    # Measured in data/style_guide/style_guide.md section 2 (12 Ghore Boshe
+    # Shikhi transcripts). Live here, not parsed from that file's prose
+    # table, so an eval manifest can log the exact number used — a test
+    # asserts these still match what section 2 claims.
+    style_max_sentence_words: int = 14
+    style_fk_min: float = 3.0
+    style_fk_max: float = 4.5
+    style_vocab_coverage_min: float = 0.9
+    history_max_messages: int = 8
     config_version: str = "v1"
 
     # --- caching ---

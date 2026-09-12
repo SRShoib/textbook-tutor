@@ -145,3 +145,48 @@ async def test_ragas_faithfulness_no_answered_rows_returns_none():
     score, n = await metrics.ragas_faithfulness(records)
     assert score is None
     assert n == 0
+
+
+# --- style_summary -----------------------------------------------------
+
+
+def _style(passed, max_sentence_words, fk_grade, vocab_coverage):
+    return {
+        "passed": passed,
+        "max_sentence_words": max_sentence_words,
+        "mean_sentence_words": max_sentence_words,
+        "fk_grade": fk_grade,
+        "vocab_coverage": vocab_coverage,
+        "oov_words": [],
+        "judge_ran": True,
+        "judge_suitable": passed,
+        "judge_reason": "ok",
+        "failures": [],
+    }
+
+
+def test_style_summary_averages_answered_rows_with_a_report():
+    records = [
+        {"status": "answered", "style": _style(True, 10, 3.0, 1.0)},
+        {"status": "answered", "style": _style(False, 14, 4.0, 0.8)},
+        {"status": "refused_off_book", "style": None},  # excluded: not answered
+    ]
+    summary = metrics.style_summary(records)
+    assert summary["n"] == 2
+    assert summary["pass_rate"] == pytest.approx(0.5)
+    assert summary["mean_fk"] == pytest.approx(3.5)
+    assert summary["mean_max_sentence_words"] == pytest.approx(12.0)
+    assert summary["mean_vocab_coverage"] == pytest.approx(0.9)
+
+
+def test_style_summary_handles_missing_fk_scores():
+    # fk_grade is None when the answer is too short to score reliably —
+    # shouldn't crash the average, just average over what's available.
+    records = [{"status": "answered", "style": _style(True, 8, None, 1.0)}]
+    summary = metrics.style_summary(records)
+    assert summary["mean_fk"] is None
+
+
+def test_style_summary_no_style_reports_returns_none():
+    records = [{"status": "answered", "style": None}]
+    assert metrics.style_summary(records) is None

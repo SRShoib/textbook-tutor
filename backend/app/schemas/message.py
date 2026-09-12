@@ -13,8 +13,15 @@ class MessageCreate(BaseModel):
 class MessageRead(BaseModel):
     """The full evidence object CLAUDE.md's API conventions call for:
     answer (content), status, sources, verification, readability,
-    latency_ms, config_version. verification and readability are always
-    null this phase — Phases 3 and 4 populate them."""
+    latency_ms, config_version. verification is always null this phase —
+    Phase 4 populates it. readability now carries style_check.py's
+    StyleReport (Phase 3).
+
+    search_query is not a database column (see CLAUDE.md's fixed schema) —
+    it's the standalone query rewrite.py produced for this turn, attached
+    only in the POST /messages response so the caller can see what a
+    follow-up was rewritten to. A message loaded straight from the ORM
+    (from_attributes) always has it as None."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -29,3 +36,4 @@ class MessageRead(BaseModel):
     config_version: str | None
     latency_ms: int | None
     created_at: datetime
+    search_query: str | None = None

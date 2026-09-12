@@ -108,3 +108,238 @@ def test_generate_stage1_passes_through_provider(monkeypatch):
     generate.generate_stage1("q", [make_chunk("some text")], provider="ollama")
 
     assert captured["provider"] == "ollama"
+
+
+# --- stage 2: style-guide loaders ---------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def restore_eval_mode():
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    original = settings.eval_mode
+    yield
+    settings.eval_mode = original
+
+
+def test_load_prompt_v1_stage2_has_grade_variable():
+    # The mirror image of stage 1's guarantee: stage 2 IS grade-aware.
+    template = generate.load_prompt(generate.STAGE2_PROMPT_VERSION)
+    assert "{grade}" in template
+    assert "{question}" in template
+    assert "{stage1_answer}" in template
+    assert "{style_rules}" in template
+    assert "{fewshot}" in template
+
+
+def test_load_style_rules_drops_evidence_quotes_but_keeps_rules():
+    rules = generate.load_style_rules()
+    # The actual rule statements survive.
+    assert "Never define-and-move-on" in rules
+    assert "Address form" in rules  # section 4 tone table
+    assert "Abstract dictionary definitions" in rules  # section 5 forbidden patterns
+    # The quoted transcript evidence does not.
+    assert "Evidence:" not in rules
+    assert "Sekhane notun bektiti ke" not in rules
+    assert "PBxbCgjFyQ8" not in rules
+
+
+def test_load_style_rules_drops_document_authoring_meta_text():
+    # "Fill each slot with what you actually observe" instructs whoever
+    # edits style_guide.md, not the model answering a student.
+    rules = generate.load_style_rules()
+    assert "Fill each slot" not in rules
+
+
+def test_load_grade_profile_grade5_has_measured_numbers():
+    profile = generate.load_grade_profile(5)
+    assert "14 words" in profile
+    assert "3.0" in profile
+
+
+def test_load_style_rules_includes_opening_move_by_default():
+    rules = generate.load_style_rules()
+    assert "Opening move" in rules
+    assert "song" in rules.lower()  # the observed pattern, described as evidence
+
+
+def test_load_style_rules_can_drop_opening_move():
+    # style_guide.md's §3.1 describes how a teacher opens a whole LESSON,
+    # once — applying it to every chatbot turn made stage 2 replay "let's
+    # sing a song" on follow-up questions (caught in a live run). Dropping
+    # it must not disturb the other structural rules.
+    rules = generate.load_style_rules(include_opening_move=False)
+    assert "Opening move" not in rules
+    assert "song" not in rules.lower()
+    assert "Never define-and-move-on" in rules  # §3.2 untouched
+    assert "Address form" in rules  # §4 untouched
+
+
+def test_load_grade_profile_returns_empty_for_unfilled_grades():
+    # Only grade 5 is filled in style_guide.md today.
+    assert generate.load_grade_profile(3) == ""
+    assert generate.load_grade_profile(8) == ""
+
+
+def test_load_fewshot_drops_textbook_passage_field():
+    examples = generate.load_fewshot(5)
+    assert len(examples) == 5
+    for ex in examples:
+        assert not hasattr(ex, "textbook_passage")
+    formatted = generate.format_fewshot(examples)
+    # This example's teacher_answer names a character absent from its own
+    # textbook_passage (different textbook edition) — showing the passage
+    # would model the exact fact-invention stage 2 must not do.
+    assert "town hall language club" not in formatted
+    assert "Andy Smith" in formatted
+
+
+def test_load_fewshot_drops_synthetic_rows_in_eval_mode(tmp_path, monkeypatch):
+    from app.core.config import get_settings
+
+    fixture = tmp_path / "fewshot.jsonl"
+    fixture.write_text(
+        "\n".join(
+            [
+                '{"id": "real1", "grade": 5, "question": "q1", "textbook_passage": "p1", "teacher_answer": "a1", "source_id": "V-1", "provenance": "real"}',
+                '{"id": "fake1", "grade": 5, "question": "q2", "textbook_passage": "p2", "teacher_answer": "a2", "source_id": "V-2", "provenance": "synthetic"}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(generate, "_FEWSHOT_PATH", fixture)
+
+    get_settings().eval_mode = True
+    rows = generate.load_fewshot(5)
+    assert [r.provenance for r in rows] == ["real"]
+
+    get_settings().eval_mode = False
+    rows = generate.load_fewshot(5)
+    assert len(rows) == 2
+
+
+def test_load_fewshot_raises_when_filtering_empties_the_list(tmp_path, monkeypatch):
+    from app.core.config import get_settings
+
+    fixture = tmp_path / "fewshot.jsonl"
+    fixture.write_text(
+        '{"id": "fake1", "grade": 5, "question": "q", "textbook_passage": "p", "teacher_answer": "a", "source_id": "V-2", "provenance": "synthetic"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(generate, "_FEWSHOT_PATH", fixture)
+    get_settings().eval_mode = True
+
+    with pytest.raises(ValueError):
+        generate.load_fewshot(5)
+
+
+def test_load_fewshot_falls_back_to_all_rows_when_grade_has_no_match():
+    # All 5 rows are grade 5; asking for grade 3 should fall back rather
+    # than return an empty (voiceless) list.
+    rows = generate.load_fewshot(3)
+    assert len(rows) == 5
+
+
+# --- render_stage2_prompt / generate_stage2 -----------------------------
+
+
+def test_render_stage2_prompt_never_contains_chunk_context():
+    # Stage 2 must not be able to add a book fact stage 1 didn't produce;
+    # the structural guarantee is that it never receives context_chunks.
+    prompt = generate.render_stage2_prompt(
+        "What is a noun?", "A noun is a naming word.", grade=5
+    )
+    assert "context_chunks" not in prompt
+    assert "town hall language club" not in prompt  # a fewshot passage
+
+
+def test_render_stage2_prompt_includes_feedback_on_retry():
+    prompt = generate.render_stage2_prompt(
+        "What is a noun?",
+        "A noun is a naming word.",
+        grade=5,
+        feedback="too many long sentences",
+    )
+    assert "too many long sentences" in prompt
+
+
+def test_render_stage2_prompt_without_feedback_has_no_placeholder_leak():
+    prompt = generate.render_stage2_prompt(
+        "What is a noun?", "A noun is a naming word.", grade=5
+    )
+    assert "{feedback}" not in prompt
+
+
+def test_render_stage2_prompt_first_turn_includes_opening_move_and_forbids_song():
+    prompt = generate.render_stage2_prompt(
+        "What is a noun?", "A noun is a naming word.", grade=5, is_first_turn=True
+    )
+    assert "first message in this conversation" in prompt
+    assert "never include a song" in prompt.lower()
+
+
+def test_render_stage2_prompt_follow_up_turn_drops_opening_move_but_still_forbids_song():
+    # The exact scenario caught in a live run: "give me more examples" right
+    # after a first question must not re-open with a greeting or a song.
+    prompt = generate.render_stage2_prompt(
+        "give me more examples", "More nouns: book, pen.", grade=5, is_first_turn=False
+    )
+    assert "follow-up in an ongoing conversation" in prompt
+    assert "Opening move" not in prompt
+    assert "never include a song" in prompt.lower()
+
+
+def test_render_stage2_prompt_defaults_to_first_turn():
+    prompt = generate.render_stage2_prompt(
+        "What is a noun?", "A noun is a naming word.", grade=5
+    )
+    assert "first message in this conversation" in prompt
+
+
+def test_generate_stage2_returns_answer_and_llm_metadata(monkeypatch):
+    captured = {}
+
+    def fake_call_llm(prompt, *, prompt_version, provider="openai", **kwargs):
+        captured["prompt"] = prompt
+        captured["prompt_version"] = prompt_version
+        return LLMResult(
+            text="Dear students, a noun is a naming word.",
+            model="gpt-test",
+            provider=provider,
+            prompt_version=prompt_version,
+            cached=False,
+            prompt_tokens=30,
+            completion_tokens=10,
+        )
+
+    monkeypatch.setattr(generate, "call_llm", fake_call_llm)
+
+    result = generate.generate_stage2(
+        "What is a noun?", "A noun is a naming word.", grade=5
+    )
+
+    assert result.answer == "Dear students, a noun is a naming word."
+    assert captured["prompt_version"] == generate.STAGE2_PROMPT_VERSION
+    assert "What is a noun?" in captured["prompt"]
+    assert "A noun is a naming word." in captured["prompt"]
+
+
+def test_generate_stage2_passes_through_is_first_turn(monkeypatch):
+    captured = {}
+
+    def fake_call_llm(prompt, *, prompt_version, provider="openai", **kwargs):
+        captured["prompt"] = prompt
+        return LLMResult(
+            text="answer", model="gpt-test", provider=provider,
+            prompt_version=prompt_version, cached=False, prompt_tokens=1, completion_tokens=1,
+        )
+
+    monkeypatch.setattr(generate, "call_llm", fake_call_llm)
+
+    generate.generate_stage2(
+        "give me more examples", "More nouns.", grade=5, is_first_turn=False
+    )
+
+    assert "follow-up in an ongoing conversation" in captured["prompt"]
+    assert "Opening move" not in captured["prompt"]

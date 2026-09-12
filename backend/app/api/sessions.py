@@ -14,6 +14,7 @@ Why POST /sessions exists already, ahead of Phase 5's sessions CRUD: without
 from __future__ import annotations
 
 import uuid
+from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,7 +67,7 @@ async def create_message(
     db.add(Message(session_id=session_id, role=MessageRole.USER, content=body.content))
     await db.commit()
 
-    result = await run_pipeline(body.content, grade=session.grade, book_id=session.book_id)
+    result = await run_pipeline(body.content, grade=session.grade, book_id=session.book_id, session_id=session_id)
 
     assistant_message = Message(
         session_id=session_id,
@@ -75,11 +76,13 @@ async def create_message(
         status=result.status,
         sources=result.sources,
         verification=None,
-        readability=None,
+        readability=asdict(result.style) if result.style is not None else None,
         config_version=result.config_version,
         latency_ms=result.latency_ms,
     )
     db.add(assistant_message)
     await db.commit()
     await db.refresh(assistant_message)
-    return assistant_message
+
+    response = MessageRead.model_validate(assistant_message)
+    return response.model_copy(update={"search_query": result.search_query})

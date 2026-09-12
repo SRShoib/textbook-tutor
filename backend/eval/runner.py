@@ -24,6 +24,7 @@ import asyncio
 import subprocess
 import time
 import uuid
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,9 +34,12 @@ from app.core.db import AsyncSessionLocal
 from app.models.book import Book
 from app.models.message import Message, MessageRole
 from app.models.session import Session
+from app.pipeline.generate import STAGE1_PROMPT_VERSION, STAGE2_PROMPT_VERSION
 from app.pipeline.graph import run_pipeline
 from app.pipeline.llm import get_stats, reset_stats
-from eval.metrics import ragas_faithfulness, read_jsonl, retrieval_hit_rate, write_jsonl
+from app.pipeline.rewrite import REWRITE_PROMPT_VERSION
+from app.pipeline.style_check import STYLE_JUDGE_PROMPT_VERSION
+from eval.metrics import ragas_faithfulness, read_jsonl, retrieval_hit_rate, style_summary, write_jsonl
 
 _DEFAULT_QUESTIONS = Path(__file__).resolve().parents[2] / "data" / "question_set" / "questions.jsonl"
 _RUNS_DIR = Path(__file__).resolve().parent / "runs"
@@ -78,6 +82,7 @@ async def _store_message_pair(session_id: uuid.UUID, question: str, config_versi
                 content=result.answer,
                 status=result.status,
                 sources=result.sources,
+                readability=asdict(result.style) if result.style is not None else None,
                 config_version=config_version,
                 latency_ms=result.latency_ms,
             )
@@ -123,6 +128,12 @@ async def run_eval(
             {
                 "id": q.get("id"),
                 "question": q["question"],
+                # Not stored on the messages row (CLAUDE.md's schema is
+                # fixed and has no column for it) — the eval JSONL is where
+                # a follow-up's rewrite is auditable. Equals `question`
+                # whenever rewrite.needs_rewrite() skipped the LLM call
+                # (every eval turn is single-turn today: session_id=None).
+                "search_query": result.search_query,
                 "answer": result.answer,
                 "status": result.status.value,
                 "best_score": result.best_score,
@@ -136,6 +147,8 @@ async def run_eval(
                 "expected_lesson_id": q.get("lesson_id"),
                 "reference_answer": q.get("reference_answer"),
                 "type": q.get("type"),
+                "style": asdict(result.style) if result.style is not None else None,
+                "style_attempts": result.style_attempts,
             }
         )
     wall_time_s = time.monotonic() - wall_start
@@ -153,10 +166,20 @@ async def run_eval(
         "provider": provider,
         "model": settings.openai_model if provider == "openai" else settings.ollama_model,
         "embedding_model": settings.embedding_model,
-        "prompt_versions": {"stage1": "v1_stage1"},
+        "prompt_versions": {
+            "stage1": STAGE1_PROMPT_VERSION,
+            "stage2": STAGE2_PROMPT_VERSION,
+            "rewrite": REWRITE_PROMPT_VERSION,
+            "style_judge": STYLE_JUDGE_PROMPT_VERSION,
+        },
         "thresholds": {
             "offbook_score_threshold": settings.offbook_score_threshold,
             "retrieval_top_k": settings.retrieval_top_k,
+            "style_max_retries": settings.style_max_retries,
+            "style_max_sentence_words": settings.style_max_sentence_words,
+            "style_fk_min": settings.style_fk_min,
+            "style_fk_max": settings.style_fk_max,
+            "style_vocab_coverage_min": settings.style_vocab_coverage_min,
         },
         "git_commit": _git_commit(),
         "book_id": str(book_id),
@@ -181,6 +204,16 @@ async def run_eval(
         print(f"RAGAS faithfulness: {faithfulness:.2f} (n={faithfulness_n})")
     else:
         print("RAGAS faithfulness: no answered questions to score")
+    style_stats = style_summary(records)
+    if style_stats is not None:
+        fk_display = style_stats["mean_fk"] if style_stats["mean_fk"] is not None else "n/a"
+        print(
+            f"Style: {style_stats['pass_rate']:.2f} pass rate (n={style_stats['n']}), "
+            f"mean FK {fk_display}, mean max-sentence {style_stats['mean_max_sentence_words']} words, "
+            f"mean vocab coverage {style_stats['mean_vocab_coverage']:.2f}"
+        )
+    else:
+        print("Style: no answered questions with a style report to summarize")
     print(
         f"LLM calls: {stats['calls']} ({stats['hits']} cache hits, {stats['misses']} misses), "
         f"{stats['prompt_tokens']} prompt tokens, {stats['completion_tokens']} completion tokens"

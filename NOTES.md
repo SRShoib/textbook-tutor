@@ -309,3 +309,249 @@ Format:
   proper — stage 2 (grade voice) built from this style guide, style_check.py,
   rewrite.py, session history. The off-book threshold (0.35) is still
   untuned — Phase 6 tunes it on the dev split, not before.
+
+---
+
+## 2026-09-12 — Phase 3 step A: generate.py stage 2 (grade voice)
+
+- built:
+  - `backend/prompts/v1_stage2.txt` — new prompt, placeholders `{grade}`,
+    `{style_rules}`, `{grade_profile}`, `{fewshot}`, `{feedback}`,
+    `{stage1_answer}`, `{question}`; plain `str.format`, no literal braces.
+  - `generate.py`: `load_style_rules()` slices style_guide.md sections 3/4/5
+    by their `## N.` headings and strips section 3's `Evidence:` quote
+    blocks (and unlabelled ones in §3.4) — keeps every prose rule, drops the
+    quoted transcript excerpts, which are provenance for the thesis, not
+    instructions for the model. `load_grade_profile(grade)` reads the §6
+    table row, empty for grades 3/8 (only 5 is filled). `load_fewshot(grade)`
+    reads `fewshot_examples.jsonl`, drops `provenance: synthetic` rows when
+    `EVAL_MODE=1`, raises if that empties the list, falls back to all rows
+    when none match the requested grade. `render_stage2_prompt()` and
+    `generate_stage2()` wire it together; `STAGE2_PROMPT_VERSION = "v1_stage2"`
+    gets its own `.llm_cache/` subfolder automatically.
+  - 15 new tests in `test_generate.py` (19 total in that file, 86 total in
+    the suite, all green).
+
+- decided:
+  - Stage 2 receives only `(question, stage1_answer)`, never
+    `context_chunks` — a structural guarantee, not just a prompt
+    instruction, that it cannot introduce a book fact stage 1 didn't
+    already produce.
+  - Few-shot examples are rendered as `(question, teacher_answer)` only —
+    `textbook_passage` is dropped. Checked one row concretely:
+    `fs_v1_comprehension`'s `teacher_answer` names "Andy Smith", who is not
+    in that row's own `textbook_passage` (the Ghore Boshe Shikhi videos use
+    an older textbook edition than the ingested book — style_guide.md §1
+    already flags this edition mismatch). Showing the passage next to that
+    answer would model exactly the fact-invention stage 2 is forbidden from
+    doing.
+  - Bangla in stage 2 output: one question restatement in Bangla **script**
+    allowed for narrative/comprehension questions (style_guide.md §3.4's
+    strongest finding), answer body stays English, and the prompt explicitly
+    forbids the transcripts' Whisper-romanised Latin spelling. Chose this
+    over "English only" (leaves the strongest style-guide finding
+    unencoded) and over "scale Bangla by question type" (needs stage 2 to
+    classify question type — another moving part to defend, for a
+    difficulty-scaling claim §3.4 itself flags as based on only 12
+    transcripts, all narrative lessons being fairly easy reads).
+  - Section 3's intro sentence ("Fill each slot with what you actually
+    observe...") is dropped from the loaded rules — it instructs whoever
+    edits style_guide.md, not the model answering a student. Confirmed by
+    test.
+
+- numbers:
+  - `load_style_rules()` output: 7,305 characters after stripping (sections
+    3+4+5), evidence-quote-free, confirmed no leaked source IDs
+    (`PBxbCgjFyQ8` etc.) or Bangla-romanised quotes.
+  - Grade 5 profile string includes the measured `14 words` sentence cap and
+    `3.0–4.5` FK target from §2; grades 3 and 8 correctly return `""`.
+  - A rendered stage-2 prompt (grade 5, no feedback) is ~9,500 characters —
+    worth watching against context/cost budgets once real eval runs start
+    (5 few-shot examples + the full §3-5 rule text on every call).
+
+- open item carried over, not closed here: PROMPTS.md's Phase 0 checkpoint
+  — the user personally picking/hand-fixing the 5 few-shot rows — is still
+  outstanding. Stage 2 is now built on top of the current 5 rows; flagging
+  again since this is the first module that actually consumes them.
+
+- next: Phase 3 step B — `style_check.py` (sentence length, vocab coverage,
+  Flesch-Kincaid, LLM judge, retry loop), per the approved 3-step plan.
+
+---
+
+## 2026-09-12 — Phase 3 step B: style_check.py
+
+- built:
+  - `backend/app/pipeline/style_check.py` — `check_style()` runs, in order:
+    sentence-length (gate on max, report mean), vocabulary coverage against
+    the book's own `chunks.text` (header line dropped) unioned with the 5
+    real few-shot `teacher_answer`s, Flesch-Kincaid on the Bangla-stripped
+    text, and an LLM judge returning `{suitable, reason}` JSON — the judge
+    only runs if the three numeric checks already passed. Word/sentence
+    splitting is a documented copy of `tools/style_guide/measure_style.py`'s
+    regexes (not an import — `tools/` isn't an importable package under
+    `backend/`), checked against the original by a test so the two can't
+    silently drift apart.
+  - `backend/prompts/v1_style_judge.txt` — new prompt, doubled `{{`/`}}` in
+    its JSON example so `str.format` doesn't choke on the literal braces.
+  - `call_llm()` in `llm.py` gained an optional `model` override (already in
+    the cache key, so cache correctness is unchanged) — the judge passes
+    `settings.openai_judge_model` through it so an answer is never graded
+    by the model that wrote it. Falls back to the main model if unset.
+  - Config: `style_max_sentence_words=14`, `style_fk_min=3.0`,
+    `style_fk_max=4.5`, `style_vocab_coverage_min=0.9` — a test asserts
+    these still match style_guide.md section 2's measured numbers.
+  - `textstat` pinned to `0.7.13` in requirements.txt — matched to the
+    version already installed ad hoc (per README.md) when
+    `measure_style.py` produced section 2's numbers; I initially pinned
+    0.7.4 without checking and corrected it before committing, since a
+    different textstat version can score FK differently and would have
+    silently invalidated the measured 3.0-4.5 target.
+  - 20 new tests in `test_style_check.py`, 2 more in `test_llm.py` for the
+    `model` override (108 total in the suite, all green).
+
+- decided:
+  - The judge runs only after the numeric checks pass — a failing sentence
+    length or vocab check is free and already reason enough to regenerate,
+    so gating the paid judge call behind them roughly halves judge calls
+    across a 150-question x 5-config eval.
+  - A still-failing report after retries does not block the answer or
+    change its status (confirmed with the user before planning this step:
+    "answered + failed report", not a new/repurposed status) — the report
+    is stored either way so error analysis can count it.
+
+- numbers: sanity-checked by hand, not just by test — grade-5 config values
+  (14 words, FK 3.0-4.5) match style_guide.md section 2 verbatim; a fixture
+  sentence pair correctly reported max=7/mean=6.5 words; Bangla-script text
+  is stripped from vocab/FK scoring while Whisper-romanised Bangla (Latin
+  letters) is deliberately NOT stripped — same artifact style_guide.md
+  documents, and exactly why stage 2's prompt requires Bangla script only.
+
+- next: Phase 3 step C — `rewrite.py`, graph rewiring, session history.
+
+---
+
+## 2026-09-12 — Phase 3 step C: rewrite.py + graph rewiring + verified live
+
+- built:
+  - `backend/app/pipeline/rewrite.py` — `needs_rewrite()` (pure heuristic,
+    biased toward rewriting: empty history never rewrites, otherwise
+    triggers on <5 words, a pronoun/deictic, or a continuation opener like
+    "give me more"/"what about"), `load_history()` (last
+    `history_max_messages=8` messages, its own DB session, same shape as
+    `retrieve.hybrid_search`), `rewrite_question()`.
+  - `backend/prompts/v1_rewrite.txt` — new prompt.
+  - `graph.py` rewired end to end:
+    `rewrite -> retrieve -> gate -> stage1 -> stage2 -> style_check`, with a
+    conditional edge back to `stage2` (feeding `report.failures` back as
+    `feedback`) until it passes or `style_max_retries` is exhausted. Fixed a
+    genuine off-by-one while writing the tests: `style_max_retries=2` now
+    correctly means 2 retries *after* the first attempt (3 total), not 2
+    attempts total — caught because a test's own comment ("1 initial + 2
+    retries = 3") didn't match what the code did.
+  - `api/sessions.py` now passes `session_id` into `run_pipeline` and stores
+    `asdict(result.style)` into the previously-always-null
+    `messages.readability` column (no migration needed — it already
+    existed, nullable, unused). The rewritten standalone query is not a DB
+    column (schema is fixed) — it rides only on `PipelineResult`, the POST
+    `/messages` response (`MessageRead.search_query`, not from the ORM row),
+    and each eval JSONL record, per the option discussed with the user
+    before planning this step.
+  - `eval/runner.py` + `eval/metrics.py`: manifest's `prompt_versions` now
+    includes stage2/rewrite/style_judge, `thresholds` includes all four
+    style numbers; `metrics.style_summary()` reports pass rate, mean FK,
+    mean max-sentence-words, mean vocab coverage over answered rows — the
+    project guidelines' "Simplicity" results row.
+  - 10 new tests in `test_rewrite.py`; `test_graph.py` rewritten (13 tests,
+    was 6) to mock the full chain end to end, including the retry loop and
+    exhaustion path; 3 new tests in `test_eval_metrics.py` for
+    `style_summary`. 128 total in the suite, all green.
+
+- decided: (bundled with step A's Bangla/status/storage decisions, made with
+  the user before planning — see that entry above)
+
+- verified live, per the user's own request — not just unit tests: started
+  the API against the already-ingested Class 5 book
+  (`97a7267b-...-4be4355e1a4f`, 135 chunks) with `ALLOW_ANONYMOUS=true`,
+  created a session, and asked two real questions through
+  `POST /sessions/{id}/messages`:
+  - Q1 "What is a noun?" (40.8s, 3 stage-2 attempts) -> answered in a
+    teacher voice with a real textbook example (school garden vocabulary,
+    Unit 2), but style_check still failed after exhausting retries: one
+    15-word sentence over the 14-word cap. Status stayed `answered` with
+    the failing report attached, exactly as designed.
+  - Q2 "give me more examples" (9.4s) -> rewrite.py correctly resolved it to
+    the standalone query "Can you provide additional examples of common
+    nouns?" using Q1's history; retrieval pulled the same noun-vocabulary
+    lesson; style_check again failed (30-word sentence, FK 6.17) and again
+    exhausted retries without blocking the answer.
+  - Real finding, not yet acted on: across both live turns, style_check
+    never once passed cleanly within 3 attempts — stage 2 keeps writing one
+    sentence over the 14-word cap even after being told the exact reason on
+    retry. The judge never got to run either time (`judge_ran: false`),
+    since the numeric checks never cleared. Worth watching once the eval
+    set runs at scale — if this is the norm rather than the exception, 14
+    words (a raw, unpunctuated Whisper p95) or the retry feedback wording
+    may need revisiting before Phase 6 tunes anything formally.
+
+- next: Phase 6's eval config should include a style-focused run once the
+  test set exists, to see whether the live-run pattern above (retries
+  exhausting without a clean pass) is typical or a fluke of these two
+  questions. Phase 4 (verify.py) is next in build order regardless.
+
+---
+
+## 2026-09-12 — Phase 3 fix: stage 2 was re-opening every turn with a song
+
+- found: the user caught this reading the step-C live-verification output —
+  Q2 ("give me more examples", a follow-up in the same session) still
+  opened with "Let's sing a little song together before we start our
+  lesson," identical to Q1's opening. Root cause: `load_style_rules()`
+  (step A) pulled in style_guide.md §3.1 "Opening move" unconditionally on
+  every stage-2 call. §3.1 documents how a teacher opens a whole LESSON
+  VIDEO once — greeting, then usually a song, then naming class/unit/
+  lesson/page — evidenced from 12 transcripts + 6 confirmed identical
+  Teacher's Guide scripts. Applying that per chatbot turn was a scoping
+  mistake made in step A: correct evidence, wrong unit of application.
+
+- decided (with the user, before touching code — this was a judgment call
+  with three real options: drop §3.1 entirely, keep it every turn but
+  greeting-only, or scope it to first-turn-only): first-turn-only, greeting
+  + lesson framing (class/unit/lesson/page), no song ever, on any turn.
+  Implementation:
+  - `generate.load_style_rules()` gained `include_opening_move: bool` —
+    drops the `### 3.1` block (evidence in style_guide.md is left
+    untouched; this is an application-layer scoping decision, documented in
+    generate.py's module docstring, not a correction to the finding).
+  - `render_stage2_prompt()` / `generate_stage2()` gained `is_first_turn`
+    (default `True`), selecting one of two `{turn_note}` strings and
+    whether `include_opening_move` is set. A standing "never include a
+    song, on any turn" instruction was added to v1_stage2.txt itself,
+    unconditionally — belt-and-suspenders since the song is forbidden
+    regardless of turn, not just omitted via the dropped rule text.
+  - `graph.py`: `rewrite_node` now also returns `is_first_turn` — `True`
+    when `session_id` is `None` (eval runner: every question is
+    independent, so treated as a first turn) or when `load_history()`
+    returned nothing (a session's actual first message); `False` whenever
+    real prior history exists. `stage2_node` threads it through.
+  - 3 new tests in `test_generate.py` targeting `load_style_rules`
+    directly, 4 more on `render_stage2_prompt`/`generate_stage2`, plus 2 new
+    end-to-end `test_graph.py` cases asserting `is_first_turn` is `False`
+    for a real follow-up and `True` for a session's first message. 135
+    total in the suite, all green (was 128).
+
+- verified live again after the fix, same book/session pattern as before:
+  Q1 no longer forces a greeting (the instruction is a soft "begin with a
+  brief one-time greeting," and the model chose to skip straight to the
+  answer this run — acceptable, since the hard requirement was only "never
+  a song," not "always greet"); Q2 confirmed clean — no greeting, no
+  lesson-framing, no song, just the answer. The pre-existing style_check
+  finding from the prior entry still holds unchanged (both turns still
+  exceed the 14-word sentence cap and exhaust retries) — unrelated to this
+  fix, still flagged as a Phase 6 follow-up, not addressed here.
+
+- next: same as previous entry — Phase 4 (verify.py) per build order.
+  Nothing in this session is committed yet; proposed commit messages for
+  steps A/B/C (plus this fix, likely folded into step C's commit since it
+  was found while verifying step C) are pending the user's decision on
+  whether to keep them separate or squash into one Phase 3 commit.

@@ -123,6 +123,25 @@ class CachedRagasLLM(InstructorBaseRagasLLM):
         return await asyncio.to_thread(self.generate, prompt, response_model)
 
 
+def style_summary(records: list[dict]) -> dict | None:
+    """Mean style numbers over answered rows carrying a style report — the
+    first numbers for project-guidelines.md section 8.3's "Simplicity" row
+    (Flesch-Kincaid, mean sentence length, vocabulary coverage), plus the
+    style-check pass rate itself. None if no row has a style report (e.g.
+    every question was refused off-book)."""
+    scored = [r for r in records if r.get("status") == "answered" and r.get("style")]
+    if not scored:
+        return None
+    fk_values = [r["style"]["fk_grade"] for r in scored if r["style"].get("fk_grade") is not None]
+    return {
+        "n": len(scored),
+        "pass_rate": sum(1 for r in scored if r["style"]["passed"]) / len(scored),
+        "mean_fk": round(sum(fk_values) / len(fk_values), 2) if fk_values else None,
+        "mean_max_sentence_words": round(sum(r["style"]["max_sentence_words"] for r in scored) / len(scored), 1),
+        "mean_vocab_coverage": round(sum(r["style"]["vocab_coverage"] for r in scored) / len(scored), 3),
+    }
+
+
 async def ragas_faithfulness(records: list[dict], *, provider: str = "openai") -> tuple[float | None, int]:
     """Average RAGAS faithfulness over 'answered' rows only — a refusal has
     no claims to check for faithfulness. Each row needs 'question',

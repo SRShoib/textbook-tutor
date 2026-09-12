@@ -27,6 +27,13 @@ numpy==2.5.3
 ragas==0.4.3
 langchain-core==1.6.2
 
+# Pipeline (Phase 3: style_check.py)
+# Pinned to the version already installed ad hoc per README.md when
+# measure_style.py produced style_guide.md section 2's numbers — a
+# different textstat version can score Flesch-Kincaid differently, which
+# would silently invalidate the measured 3.0-4.5 target.
+textstat==0.7.13
+
 # Tests
 pytest==8.3.4
 pytest-asyncio==0.25.0

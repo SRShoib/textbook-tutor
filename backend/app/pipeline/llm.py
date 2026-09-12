@@ -121,13 +121,20 @@ def call_llm(
     prompt_version: str,
     system: str | None = None,
     provider: str = "openai",
+    model: str | None = None,
     temperature: float = 0.0,
     max_tokens: int | None = None,
 ) -> LLMResult:
     """The only function in this project that calls an LLM. Checks the disk
-    cache first; only calls the network on a miss."""
+    cache first; only calls the network on a miss.
+
+    `model` overrides the provider's default (settings.openai_model /
+    settings.ollama_model) — style_check.py's LLM judge uses this to call
+    settings.openai_judge_model instead of the main model, so an answer is
+    never graded by the same model that wrote it. Left None, behaviour is
+    unchanged from before this parameter existed."""
     settings = get_settings()
-    model = _model_for(provider)
+    model = model or _model_for(provider)
     key = cache_key(prompt_version, model, provider, system, prompt, temperature, max_tokens)
 
     _stats["calls"] += 1

@@ -1,29 +1,77 @@
 """
-What: stage 1 of the two-stage generation CLAUDE.md specifies — a plain
-      factual answer grounded only in the retrieved+expanded lesson text,
-      via prompts/v1_stage1.txt.
+What: the two-stage generation CLAUDE.md specifies. Stage 1 (Phase 2) is a
+      plain factual answer grounded only in the retrieved+expanded lesson
+      text, via prompts/v1_stage1.txt. Stage 2 (Phase 3) rewrites that
+      answer in a Class-N Bangladeshi teacher voice, via prompts/v1_stage2.txt.
 
-Why two stages, and why grade never appears here: stage 1 is checked for
-      correctness, stage 2 (Phase 3) rewrites it in a Class-N teacher voice
-      and must never introduce a fact stage 1 didn't produce. Keeping the
-      grade variable out of v1_stage1.txt entirely is what makes that
-      "stage 2 added no new facts" check meaningful later — stage 1's output
-      cannot already be grade-flavoured.
+Why two stages, and why grade never appears in stage 1: stage 1 is checked
+      for correctness, stage 2 rewrites it in a Class-N teacher voice and
+      must never introduce a fact stage 1 didn't produce. Keeping the grade
+      variable out of v1_stage1.txt entirely is what makes that "stage 2
+      added no new facts" check meaningful — stage 1's output cannot already
+      be grade-flavoured.
+
+Why stage 2 never receives context_chunks: it only sees the question and
+      the stage-1 answer. If it structurally cannot read the book, it
+      structurally cannot add a book fact stage 1 didn't already produce —
+      that is what makes the "no new facts" constraint enforceable rather
+      than just a prompt instruction hoping the model complies.
+
+Why few-shot examples carry only (question, teacher_answer), not the
+      textbook_passage they were sourced from: one example's teacher_answer
+      names a character absent from its own passage (the video and the
+      currently-ingested book are different editions — see style_guide.md
+      note under Sources). Showing the passage next to that answer would
+      model exactly the fact-invention stage 2 is forbidden from doing, so
+      the passage field is dropped before the pair reaches the prompt.
+
+Why Bangla is restricted to a single question restatement here: the style
+      guide's own §3.4 finding is Bangla usage that scales with lesson
+      difficulty, and the strongest evidence is grade 5 comprehension
+      questions being restated in Bangla script before an English answer.
+      A full bilingual answer is a bigger claim than the evidence supports
+      today, so v1_stage2.txt asks for at most one restatement, in Bangla
+      script (never the transcripts' Whisper-romanised Latin spelling).
+
+Why load_style_rules() can drop section 3.1 (opening move) per call: §3.1
+      documents how a teacher opens a whole LESSON — greeting, then
+      (usually) a song, then naming the unit/lesson/page — once, at the
+      start of a video that runs many questions long. Applying that
+      wholesale to every chatbot turn made stage 2 replay the greeting and
+      "let's sing a song" on follow-up questions mid-conversation, which is
+      wrong on its face (caught live: asking "give me more examples" right
+      after a first question still opened with a song). graph.py now passes
+      `is_first_turn`; only the first turn of a session gets the greeting +
+      lesson-framing instruction, and a song is forbidden outright, on every
+      turn, regardless — this project has no audio, so §3.1's song finding
+      has nothing to render into. The evidence itself is left untouched in
+      style_guide.md; this is a scoping decision made in the application
+      layer, not a correction to the research finding.
 """
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.config import get_settings
 from app.models.chunk import Chunk
 from app.pipeline.llm import LLMResult, call_llm
 
 STAGE1_PROMPT_VERSION = "v1_stage1"
+STAGE2_PROMPT_VERSION = "v1_stage2"
 
 # backend/app/pipeline/generate.py -> parents[2] is backend/, where
 # prompts/ lives (matches the repo layout in CLAUDE.md).
 _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
+
+# backend/app/pipeline/generate.py -> parents[3] is the repo root (same
+# depth as llm.py's _REPO_ROOT).
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_STYLE_GUIDE_PATH = _REPO_ROOT / "data" / "style_guide" / "style_guide.md"
+_FEWSHOT_PATH = _REPO_ROOT / "data" / "style_guide" / "fewshot_examples.jsonl"
 
 
 def load_prompt(version: str) -> str:
@@ -54,3 +102,237 @@ def generate_stage1(question: str, context_chunks: list[Chunk], *, provider: str
     prompt = render_stage1_prompt(question, context)
     result = call_llm(prompt, prompt_version=STAGE1_PROMPT_VERSION, provider=provider)
     return Stage1Result(answer=result.text, llm=result)
+
+
+# --- stage 2: grade-voice rewrite --------------------------------------
+
+_TOP_SECTION_RE = re.compile(r"^## (\d+)\..*$", re.MULTILINE)
+_BULLET_RE = re.compile(r"^\s*-\s")
+
+
+def _top_sections(text: str) -> dict[int, str]:
+    """Split style_guide.md by its '## N. Title' headings (not '### N.M').
+    Returns each section's raw text, trailing '---' rule stripped."""
+    matches = list(_TOP_SECTION_RE.finditer(text))
+    sections: dict[int, str] = {}
+    for i, m in enumerate(matches):
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[start:end].rstrip()
+        body = re.sub(r"\n-{3,}\s*$", "", body).strip()
+        sections[int(m.group(1))] = body
+    return sections
+
+
+def _strip_evidence_quotes(section3_text: str) -> str:
+    """Section 3's rules are prose; every rule is followed by a '-' bulleted
+    block of quoted transcript/Teacher's Guide excerpts (labelled 'Evidence:'
+    in 3.1/3.2/3.3/3.5, unlabelled in 3.4). Those quotes are provenance for
+    the thesis, not instructions for the model, and are ~40% of the section's
+    bytes — this drops the label and every bullet (plus its wrapped
+    continuation lines) while keeping every prose rule statement intact."""
+    out: list[str] = []
+    in_bullet = False
+    for line in section3_text.splitlines():
+        stripped = line.strip()
+        if stripped == "Evidence:":
+            in_bullet = True
+            continue
+        if _BULLET_RE.match(line):
+            in_bullet = True
+            continue
+        if in_bullet:
+            if stripped == "":
+                in_bullet = False
+                out.append(line)
+                continue
+            if stripped.startswith("#") or stripped.startswith("**"):
+                in_bullet = False
+                # falls through to the normal append below
+            else:
+                continue  # wrapped continuation of the bullet above
+        out.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
+def _drop_subsection(section_text: str, number: str) -> str:
+    """Remove one '### N.M ...' block (heading through its content, up to
+    the next '### ' heading or end of text)."""
+    pattern = re.compile(rf"### {re.escape(number)} .*?(?=\n### |\Z)", re.DOTALL)
+    return pattern.sub("", section_text).strip()
+
+
+def load_style_rules(*, include_opening_move: bool = True) -> str:
+    """Sections 3 (structural), 4 (tone) and 5 (forbidden patterns) of
+    style_guide.md, evidence quotes stripped from section 3. Sections 1
+    (sources), 2 (numeric thresholds — those go through config.py, not the
+    prompt), 6 (grade profiles — loaded separately per grade), 7 and 8 are
+    documentation for the thesis, not model instructions.
+
+    include_opening_move=False drops section 3.1 (greeting + song + lesson
+    framing). That rule describes how a teacher opens a whole LESSON, once —
+    applying it to every chatbot turn made stage 2 replay "let's sing a
+    song" on follow-up questions like "give me more examples" mid-
+    conversation. render_stage2_prompt() passes this through as
+    `not is_first_turn`; the rule's evidence stays untouched in
+    style_guide.md itself — this is an application-layer scoping decision,
+    not a correction to the research finding."""
+    text = _STYLE_GUIDE_PATH.read_text(encoding="utf-8")
+    sections = _top_sections(text)
+
+    section3 = sections[3]
+    # Drop section 3's intro paragraph ("Fill each slot with what you
+    # actually observe...") — that sentence instructs whoever edits this
+    # document, not the model answering a student.
+    first_sub = section3.find("\n### ")
+    if first_sub != -1:
+        section3 = section3[first_sub + 1 :]
+    section3 = _strip_evidence_quotes(section3)
+    if not include_opening_move:
+        section3 = _drop_subsection(section3, "3.1")
+
+    return "\n\n".join([section3, sections[4], sections[5]])
+
+
+def load_grade_profile(grade: int) -> str:
+    """The '## 6. Grade profiles' table row for this grade, rendered as
+    'Column: value' pairs, empty cells skipped. Grades 3 and 8 have no
+    filled cells yet (only Grade 5 is the primary target), so they return
+    "" and the caller falls back to the general rules from load_style_rules()."""
+    text = _STYLE_GUIDE_PATH.read_text(encoding="utf-8")
+    sections = _top_sections(text)
+    columns: list[str] | None = None
+    for line in sections[6].splitlines():
+        row = line.strip()
+        if not row.startswith("|"):
+            continue
+        cells = [c.strip() for c in row.strip("|").split("|")]
+        if columns is None:
+            if cells and cells[0].lower() == "grade":
+                columns = cells
+            continue
+        if set(row) <= {"|", "-", " "}:
+            continue  # the '|---|---|' separator row
+        if cells and cells[0] == str(grade):
+            pairs = [
+                f"{col}: {val}"
+                for col, val in zip(columns, cells)
+                if val and col.lower() != "grade"
+            ]
+            return "; ".join(pairs)
+    return ""
+
+
+@dataclass(frozen=True)
+class FewshotExample:
+    question: str
+    teacher_answer: str
+    grade: int
+    provenance: str
+
+
+def load_fewshot(grade: int) -> list[FewshotExample]:
+    """Real (question, teacher_answer) pairs from fewshot_examples.jsonl.
+    Deliberately drops textbook_passage — see the module docstring for why.
+    Refuses 'synthetic' rows when EVAL_MODE=1 (CLAUDE.md: prompts.md rule),
+    and raises rather than silently running few-shot-free if that empties
+    the list, so an eval run can't quietly lose its few-shot examples.
+    Falls back to all remaining rows if none match `grade` exactly."""
+    settings = get_settings()
+    rows: list[FewshotExample] = []
+    with _FEWSHOT_PATH.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if settings.eval_mode and row["provenance"] == "synthetic":
+                continue
+            rows.append(
+                FewshotExample(
+                    question=row["question"],
+                    teacher_answer=row["teacher_answer"],
+                    grade=row["grade"],
+                    provenance=row["provenance"],
+                )
+            )
+    if not rows:
+        raise ValueError(
+            "No few-shot examples available after filtering "
+            f"({_FEWSHOT_PATH}, EVAL_MODE={settings.eval_mode}) — "
+            "stage 2 must not run voiceless."
+        )
+    grade_rows = [r for r in rows if r.grade == grade]
+    return grade_rows or rows
+
+
+def format_fewshot(examples: list[FewshotExample]) -> str:
+    return "\n\n".join(f"Question: {ex.question}\nTeacher: {ex.teacher_answer}" for ex in examples)
+
+
+_FIRST_TURN_NOTE = (
+    "This is the first message in this conversation. Following the opening-"
+    "move rule below, begin with a brief one-time greeting and name the "
+    "unit, lesson and page this comes from — but skip the song step "
+    "described there entirely; that does not apply to a text chat."
+)
+_FOLLOW_UP_TURN_NOTE = (
+    "This is a follow-up in an ongoing conversation, not the start of a "
+    "lesson. Do not repeat the greeting and do not name the unit, lesson or "
+    "page again — go straight into answering."
+)
+
+
+def render_stage2_prompt(
+    question: str,
+    stage1_answer: str,
+    *,
+    grade: int,
+    is_first_turn: bool = True,
+    feedback: str | None = None,
+) -> str:
+    template = load_prompt(STAGE2_PROMPT_VERSION)
+    grade_profile = load_grade_profile(grade)
+    if not grade_profile:
+        grade_profile = (
+            "No specific numeric profile recorded yet for this grade — "
+            "follow the general rules above."
+        )
+    feedback_block = ""
+    if feedback:
+        feedback_block = (
+            f"\nYour previous attempt did not pass the style check: {feedback}\n"
+            "Rewrite the answer to fix this, without changing any fact.\n"
+        )
+    return template.format(
+        grade=grade,
+        turn_note=_FIRST_TURN_NOTE if is_first_turn else _FOLLOW_UP_TURN_NOTE,
+        style_rules=load_style_rules(include_opening_move=is_first_turn),
+        grade_profile=grade_profile,
+        fewshot=format_fewshot(load_fewshot(grade)),
+        feedback=feedback_block,
+        stage1_answer=stage1_answer,
+        question=question,
+    )
+
+
+@dataclass(frozen=True)
+class Stage2Result:
+    answer: str
+    llm: LLMResult
+
+
+def generate_stage2(
+    question: str,
+    stage1_answer: str,
+    *,
+    grade: int,
+    is_first_turn: bool = True,
+    provider: str = "openai",
+    feedback: str | None = None,
+) -> Stage2Result:
+    prompt = render_stage2_prompt(
+        question, stage1_answer, grade=grade, is_first_turn=is_first_turn, feedback=feedback
+    )
+    result = call_llm(prompt, prompt_version=STAGE2_PROMPT_VERSION, provider=provider)
+    return Stage2Result(answer=result.text, llm=result)

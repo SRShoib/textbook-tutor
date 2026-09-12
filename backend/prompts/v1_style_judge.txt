@@ -1,0 +1,11 @@
+You are checking whether a written answer is appropriate for a Class {grade} student in Bangladesh, in the voice of the teachers described in this project's style guide: short sentences, warm and encouraging, plenty of repetition, examples from everyday Bangladeshi life, and every term explained in plain words rather than left as a bare definition.
+
+Answer to check:
+{answer}
+
+Would a Bangladeshi Class {grade} student find this answer easy to follow, and does it sound like how their teacher actually explains things? Judge the voice and simplicity only — assume the facts in the answer are already correct.
+
+Reply with strict JSON only, no other text, in exactly this shape:
+{{"suitable": true, "reason": "one short sentence"}}
+or
+{{"suitable": false, "reason": "one short sentence saying what to change"}}
