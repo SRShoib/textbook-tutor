@@ -19,12 +19,13 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import get_current_user_id
+from app.core.auth import get_current_user, get_current_user_id
 from app.core.db import get_db
 from app.core.errors import AppError
 from app.models.book import Book, BookStatus
 from app.models.message import Message, MessageRole
 from app.models.session import Session
+from app.models.user import User
 from app.pipeline.graph import run_pipeline
 from app.schemas.message import MessageCreate, MessageRead
 from app.schemas.session import SessionCreate, SessionRead
@@ -35,14 +36,15 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 @router.post("", response_model=SessionRead, status_code=status.HTTP_201_CREATED)
 async def create_session(
     body: SessionCreate,
-    user_id: uuid.UUID = Depends(get_current_user_id),
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Session:
     book = await db.get(Book, body.book_id)
     if book is None:
         raise AppError("BOOK_NOT_FOUND", f"No book with id {body.book_id}.", status_code=404)
 
-    session = Session(user_id=user_id, book_id=body.book_id, grade=body.grade)
+    grade = body.grade if body.grade is not None else user.grade
+    session = Session(user_id=user.id, book_id=body.book_id, grade=grade)
     db.add(session)
     await db.commit()
     await db.refresh(session)

@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     # --- auth ---
     jwt_secret: str = "change-me"
     access_token_minutes: int = 30
+    refresh_token_days: int = 30
+    # False in local dev (plain http). Set true behind TLS in any real deployment.
+    cookie_secure: bool = False
+    login_rate_limit_attempts: int = 5
+    login_rate_limit_window_seconds: int = 300
     allow_anonymous: bool = True
 
     # --- eval ---

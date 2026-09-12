@@ -783,3 +783,70 @@ Format:
   this. Revisit then with real eval-set volume behind it, not one question.
 
 - next: Phase 5 — SSE, sessions CRUD, JWT auth, `POST /evaluate`.
+
+## 2026-09-12 — Phase 5, module 1: JWT auth
+
+Planned as one module, not the whole phase (CLAUDE.md's working rhythm is explicit
+that a phase-sized plan is too big to review). Fixed order set for the rest of
+Phase 5: sessions CRUD + title generation next, then `POST /api/v1/evaluate`, then
+SSE streaming last (it's the hard one — `call_llm()` is synchronous and cache-first
+with no streaming path at all, so real `token` events need a design decision inside
+the one function CLAUDE.md mandates every LLM call go through), then a final test
+sweep (`test_embeddings.py` is the one pipeline module still untested).
+
+Built: `core/security.py` (argon2 password hashing via passlib; HS256 JWT for
+access + refresh tokens), `core/rate_limit.py` (hand-rolled in-memory fixed-window
+limiter for login), `models/refresh_token.py` + migration `0002` (a
+`refresh_tokens` table), `schemas/user.py`, `api/auth.py` (register/login/refresh/
+logout/me). `core/auth.py`'s `get_current_user_id()` is now a thin wrapper over a
+new `get_current_user()` that tries a Bearer token first, falls back to the
+existing dev-user path only when `ALLOW_ANONYMOUS=true` and no header was sent at
+all, and 401s on a header that's present but invalid (even under
+`ALLOW_ANONYMOUS`) rather than silently falling back — a bad token should surface
+as an error, not quietly write rows under the dev user. `get_or_create_dev_user()`
+and everything `eval/runner.py` imports from `core/auth.py` are untouched.
+
+Judgment calls, decided with the user before writing code (not silently picked):
+- Refresh tokens are stateful (a DB table, hash stored not the raw token) so
+  `POST /auth/logout` is a real revocation and rotation-on-refresh can detect a
+  stolen token being replayed — reusing an already-rotated token now revokes every
+  active token for that user, not just the one replayed.
+- Login rate limiting is hand-rolled and in-memory (keyed on email+client IP), not
+  a library or Redis — CLAUDE.md rules out a second database and the app runs
+  single-process on the host, so a dependency would add machinery without adding
+  capability. Limitation for the thesis write-up: this resets on restart and
+  doesn't hold across multiple workers.
+- Auth got route tests (`test_auth_routes.py`, marked `db`), a documented exception
+  to "skip route tests unless asked" — token expiry/rotation/cookie behavior can't
+  be exercised by a pipeline-style unit test.
+- `SessionCreate.grade` is now optional and falls back to `user.grade`, the other
+  half of CLAUDE.md's "on register, grade becomes the default for new sessions."
+
+New dependencies: `pyjwt`, `passlib[argon2]`, `argon2-cffi`, `email-validator`,
+`httpx` (tests only). passlib 1.7.4 is unmaintained; fine on this project's
+Python 3.12, noted in `requirements.txt` in case of a future Python upgrade.
+
+Test infra: first `conftest.py` for the backend. Route tests need a real Postgres
+connection, so they use a transaction-rollback `AsyncSession` (bound with
+`join_transaction_mode="create_savepoint"` so a route's own `commit()` lands on a
+savepoint, then the outer transaction rolls back) rather than a second test
+database. Discovered along the way: that session must NOT reuse the shared
+module-level engine from `core/db.py` — its pooled asyncpg connections are
+loop-bound, and pytest-asyncio gives each test its own event loop, so a pooled
+connection from one test breaks when a later test's loop tries to close it.
+Fixed by giving the test fixture its own `NullPool` engine instead of importing
+the app's engine; not a global pytest-asyncio config change, so the 148 existing
+pipeline tests are untouched. New `db` pytest marker registered in `pytest.ini` —
+`pytest -m "not db"` runs exactly the old suite with Docker stopped.
+
+Suite: 148 → 179 tests (16 pure unit tests for security/rate-limit, 15 route tests
+against real Postgres). All green, both with and without Docker running.
+Verified by hand against a live server: register → grade stored → `/me` →
+`/refresh` rotates the cookie → `/logout` → replaying the old refresh token fails;
+`POST /sessions` with no `grade` in the body correctly inherits the registering
+user's grade (8) rather than the book's grade (5). Did not run
+`eval.runner` end-to-end as a regression check — no `.llm_cache` entries exist yet,
+so a real run would spend real OpenAI money for a check answerable by reading the
+code: `eval/runner.py`'s only dependency on `core/auth.py` is
+`get_or_create_dev_user`, which this module left untouched, and `eval.runner`/
+`app.main` both import cleanly.
