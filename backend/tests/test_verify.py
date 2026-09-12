@@ -211,3 +211,91 @@ async def test_verify_answer_empty_answer_passes_trivially(monkeypatch):
     assert report.passed is True
     assert report.supported_ratio == 1.0
     assert report.sentences == []
+
+
+# --- is_scaffolding_sentence (Phase 6 fix) ------------------------------
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Dear students, today we are in Class 5, Social Studies, Unit 3, Lesson 2, on page 45.",
+        "Hello, dear students! I hope you are all doing well today.",
+        "Let's begin our lesson.",
+        "Let's get ready for our lesson.",
+        "Let's get started with our lesson.",
+        "Now, let's focus on our lesson.",
+        "We are in Class 5, and today we will be learning about geography.",
+        "Does everyone understand?",
+        "We are in Unit 5, Lesson 2, on page 45.",
+        "I'll repeat that.",
+        "I will repeat that.",
+        'You asked, "What is the capital city of Indonesia?"',
+        "Now, to answer the question: How many upazilas does Kishoreganj district have?",
+        "Do you understand?",
+        "Now, can anyone tell me why it is important to be quiet when someone is sleeping?",
+        "Great job, everyone!",
+        "So, what have we learned today?",
+    ],
+)
+def test_is_scaffolding_sentence_matches_documented_patterns(sentence):
+    assert verify.is_scaffolding_sentence(sentence) is True
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Rina likes to read science fiction books.",
+        "The capital city of Indonesia is Jakarta.",
+        "The Sundarbans is located in Khulna, Satkhira and Bagerhat districts.",
+        "An imperative sentence usually starts with a verb.",
+        # The model sometimes glues the fact directly onto a
+        # question-answering lead-in instead of a separate sentence — this
+        # must NOT be dropped, or the only copy of the fact disappears.
+        "To answer your question, Kishoreganj district has 13 upazilas.",
+    ],
+)
+def test_is_scaffolding_sentence_leaves_factual_sentences_alone(sentence):
+    assert verify.is_scaffolding_sentence(sentence) is False
+
+
+# --- verify_answer excludes scaffolding from scoring (Phase 6 fix) -----
+
+
+@pytest.mark.asyncio
+async def test_verify_answer_excludes_scaffolding_from_supported_ratio(monkeypatch):
+    # The exact shape of the dev-split bug: a correct fact wrapped in
+    # unscoreable framing must not be dragged down by that framing.
+    chunk = make_chunk("u6-s2", "The capital city of Indonesia is Jakarta.")
+    fake = FakeCrossEncoder({(chunk.text, "The capital city of Indonesia is Jakarta."): 0.99})
+    monkeypatch.setattr(verify, "get_nli_model", lambda: fake)
+    get_settings().verify_entailment_threshold = 0.5
+    get_settings().verify_supported_ratio = 0.8
+
+    answer = (
+        "Dear students, today we are in Class 5, English, Unit 6, Lesson 2, on page 36. "
+        "The capital city of Indonesia is Jakarta. "
+        "I'll repeat that. Do you understand?"
+    )
+    report = await verify.verify_answer(answer, [chunk])
+
+    assert report.passed is True
+    assert report.supported_ratio == pytest.approx(1.0)
+    assert [s.sentence for s in report.sentences] == ["The capital city of Indonesia is Jakarta."]
+    assert len(report.skipped_sentences) == 3  # greeting+citation, repeat marker, comprehension check
+
+
+@pytest.mark.asyncio
+async def test_verify_answer_all_scaffolding_passes_trivially(monkeypatch):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("no real sentences to check — the model must not be loaded")
+
+    monkeypatch.setattr(verify, "get_nli_model", fail_if_called)
+
+    report = await verify.verify_answer(
+        "Dear students, hello! Do you understand?", [make_chunk("u1-s1", "Some text.")]
+    )
+
+    assert report.passed is True
+    assert report.sentences == []
+    assert len(report.skipped_sentences) == 2

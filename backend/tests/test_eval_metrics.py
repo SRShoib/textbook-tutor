@@ -190,3 +190,117 @@ def test_style_summary_handles_missing_fk_scores():
 def test_style_summary_no_style_reports_returns_none():
     records = [{"status": "answered", "style": None}]
     assert metrics.style_summary(records) is None
+
+
+# --- refusal_accuracy / false_refusal_rate (project-guidelines.md 8.3) -
+
+
+def test_refusal_accuracy_counts_any_non_answered_status_as_correct():
+    records = [
+        {"type": "off_book", "status": "refused_off_book"},  # correct: refused
+        {"type": "off_book", "status": "refused_unverified"},  # correct: refused, different check
+        {"type": "off_book", "status": "answered"},  # wrong: hallucinated an answer
+        {"type": "factual", "status": "answered"},  # not off_book, excluded
+    ]
+    rate, n = metrics.refusal_accuracy(records)
+    assert rate == pytest.approx(2 / 3)
+    assert n == 3
+
+
+def test_refusal_accuracy_no_off_book_rows_returns_none():
+    records = [{"type": "factual", "status": "answered"}]
+    rate, n = metrics.refusal_accuracy(records)
+    assert rate is None
+    assert n == 0
+
+
+def test_false_refusal_rate_counts_non_answered_answerable_rows():
+    records = [
+        {"type": "factual", "status": "answered"},  # correct
+        {"type": "factual", "status": "refused_unverified"},  # false refusal
+        {"type": "vocabulary", "status": "refused_off_book"},  # false refusal
+        {"type": "off_book", "status": "refused_off_book"},  # not answerable, excluded
+    ]
+    rate, n = metrics.false_refusal_rate(records)
+    assert rate == pytest.approx(2 / 3)
+    assert n == 3
+
+
+def test_false_refusal_rate_no_answerable_rows_returns_none():
+    records = [{"type": "off_book", "status": "refused_off_book"}]
+    rate, n = metrics.false_refusal_rate(records)
+    assert rate is None
+    assert n == 0
+
+
+# --- hallucination_rate -------------------------------------------------
+
+
+def test_hallucination_rate_averages_unsupported_fraction():
+    records = [
+        {"status": "answered", "verification": {"supported_ratio": 1.0}},  # 0% hallucinated
+        {"status": "answered", "verification": {"supported_ratio": 0.5}},  # 50% hallucinated
+        {"status": "answered", "verification": None},  # config B/C: no report, excluded
+        {"status": "refused_unverified", "verification": {"supported_ratio": 0.0}},  # not answered, excluded
+    ]
+    rate, n = metrics.hallucination_rate(records)
+    assert rate == pytest.approx(0.25)  # mean(0.0, 0.5)
+    assert n == 2
+
+
+def test_hallucination_rate_no_verification_reports_returns_none():
+    # This is the expected shape for a config-B/C run: verify_node never
+    # ran, so no row carries a verification report at all.
+    records = [{"status": "answered", "verification": None}]
+    rate, n = metrics.hallucination_rate(records)
+    assert rate is None
+    assert n == 0
+
+
+# --- severe_hallucination_rate (2026-09-13, companion to hallucination_rate) -
+
+
+def test_severe_hallucination_rate_counts_only_zero_ratio_rows():
+    records = [
+        {"status": "answered", "verification": {"supported_ratio": 0.0}},  # severe: nothing supported
+        {"status": "answered", "verification": {"supported_ratio": 0.5}},  # partial, not severe
+        {"status": "answered", "verification": {"supported_ratio": 1.0}},  # clean pass
+        {"status": "answered", "verification": None},  # config B/C: excluded
+        {"status": "refused_unverified", "verification": {"supported_ratio": 0.0}},  # not answered, excluded
+    ]
+    rate, n = metrics.severe_hallucination_rate(records)
+    assert rate == pytest.approx(1 / 3)
+    assert n == 3
+
+
+def test_severe_hallucination_rate_no_verification_reports_returns_none():
+    records = [{"status": "answered", "verification": None}]
+    rate, n = metrics.severe_hallucination_rate(records)
+    assert rate is None
+    assert n == 0
+
+
+# --- readability_summary -------------------------------------------------
+
+
+def test_readability_summary_scores_answer_text_directly():
+    # Real English text long enough (30+ words) for check_fk_grade to
+    # return a number rather than None — readability_summary must work
+    # from the raw answer string alone, with no style report involved.
+    long_answer = " ".join(["This is a simple sentence about a boy and his school."] * 5)
+    records = [
+        {"status": "answered", "answer": long_answer},
+        {"status": "answered", "answer": "Too short to score."},
+        {"status": "refused_off_book", "answer": "I couldn't find anything about that."},
+    ]
+    summary = metrics.readability_summary(records)
+    assert summary["n"] == 2  # both answered rows count toward sentence length
+    assert summary["fk_n"] == 1  # only the long one is long enough for an FK score
+    assert summary["mean_fk"] is not None
+    assert summary["mean_sentence_words"] > 0
+    assert summary["mean_max_sentence_words"] > 0
+
+
+def test_readability_summary_no_answered_rows_returns_none():
+    records = [{"status": "refused_off_book", "answer": "no"}]
+    assert metrics.readability_summary(records) is None

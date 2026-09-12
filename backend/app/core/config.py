@@ -41,7 +41,24 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 5
     offbook_score_threshold: float = 0.35
     verify_entailment_threshold: float = 0.5
-    verify_supported_ratio: float = 0.8
+    # Tuned down from 0.8 on the dev split (Phase 6 error analysis, never
+    # touched test): even after excluding scaffolding sentences and fixing
+    # the sentence splitter, ~49% of remaining false refusals sat at
+    # supported_ratio exactly 0.0 (no threshold recovers these — genuine
+    # NLI cross-encoder strictness on paraphrase: tense changes, pronoun to
+    # noun substitution, true added detail) while the rest cleared 0.33+.
+    # At 0.5, eval/metrics.py's hallucination_rate jumps from ~3% to ~24% —
+    # NOT confirmed safe by that number alone. A full manual+automated audit
+    # of all 72 dev-split answers this let through (cross-checked against
+    # questions.jsonl's reference_answer) found zero actual fabrications:
+    # every "unsupported" sentence was the SAME fact restated in a noisier
+    # wrapper next to a cleanly-scoring restatement of it (style_guide.md's
+    # "heavy repetition" pattern, §3.2/§3.3), which is exactly what inflates
+    # this metric — it counts per sentence, not per distinct claim. See
+    # NOTES.md for the audit. hallucination_rate itself may need redefining
+    # (dedupe near-identical sentences before scoring) before quoting 24% in
+    # the thesis as if it meant 1-in-4 answers contains a fabricated fact.
+    verify_supported_ratio: float = 0.5
     verify_max_retries: int = 1
     style_max_retries: int = 2
     # Measured in data/style_guide/style_guide.md section 2 (12 Ghore Boshe

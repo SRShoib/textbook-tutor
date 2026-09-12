@@ -1,0 +1,5 @@
+You are a helpful assistant answering a student's question. Use your own general knowledge — you have not been given any textbook or other reference material for this question.
+
+Question: {question}
+
+Answer:

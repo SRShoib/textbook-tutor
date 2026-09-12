@@ -297,6 +297,36 @@ def test_render_stage2_prompt_defaults_to_first_turn():
     assert "first message in this conversation" in prompt
 
 
+def test_render_stage2_prompt_first_turn_names_the_real_source_citation():
+    # Phase 6 fix: stage 2 must be told the true citation, not left to
+    # invent one — a 120-question dev run showed it always fabricated one
+    # of two fake citations when this wasn't threaded through.
+    prompt = generate.render_stage2_prompt(
+        "What is a noun?", "A noun is a naming word.", grade=5, source_citation="Unit 4, Lesson 5, page 22"
+    )
+    assert "Unit 4, Lesson 5, page 22" in prompt
+    assert "use exactly that, do not guess or invent a different one" in prompt
+
+
+def test_render_stage2_prompt_follow_up_turn_omits_source_citation():
+    # No opening move on a follow-up at all, so naming a citation (real or
+    # otherwise) would contradict "do not name the unit, lesson or page again".
+    prompt = generate.render_stage2_prompt(
+        "give me more examples", "More nouns: book, pen.", grade=5,
+        is_first_turn=False, source_citation="Unit 4, Lesson 5, page 22",
+    )
+    assert "Unit 4, Lesson 5, page 22" not in prompt
+
+
+def test_render_stage2_prompt_first_turn_falls_back_without_source_citation():
+    # Defensive default only — route_after_retrieve guarantees a real
+    # citation is always passed in practice (see graph.py's stage2_node).
+    prompt = generate.render_stage2_prompt(
+        "What is a noun?", "A noun is a naming word.", grade=5
+    )
+    assert "the source lesson" in prompt
+
+
 def test_generate_stage2_returns_answer_and_llm_metadata(monkeypatch):
     captured = {}
 
@@ -343,3 +373,22 @@ def test_generate_stage2_passes_through_is_first_turn(monkeypatch):
 
     assert "follow-up in an ongoing conversation" in captured["prompt"]
     assert "Opening move" not in captured["prompt"]
+
+
+def test_generate_stage2_passes_through_source_citation(monkeypatch):
+    captured = {}
+
+    def fake_call_llm(prompt, *, prompt_version, provider="openai", **kwargs):
+        captured["prompt"] = prompt
+        return LLMResult(
+            text="answer", model="gpt-test", provider=provider,
+            prompt_version=prompt_version, cached=False, prompt_tokens=1, completion_tokens=1,
+        )
+
+    monkeypatch.setattr(generate, "call_llm", fake_call_llm)
+
+    generate.generate_stage2(
+        "What is a noun?", "A noun is a naming word.", grade=5, source_citation="Unit 4, Lesson 5, page 22"
+    )
+
+    assert "Unit 4, Lesson 5, page 22" in captured["prompt"]

@@ -1,0 +1,16 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 30 files:   0%|          | 0/30 [00:00<?, ?it/s]Fetching 30 files: 100%|##########| 30/30 [00:00<00:00, 3283.56it/s]
+Loading weights:   0%|          | 0/391 [00:00<?, ?it/s]Loading weights:   1%|1         | 5/391 [00:03<04:19,  1.49it/s]Loading weights: 100%|##########| 391/391 [00:03<00:00, 115.28it/s]
+Loading weights:   0%|          | 0/202 [00:00<?, ?it/s]Loading weights:   8%|7         | 16/202 [00:00<00:01, 159.15it/s]Loading weights:  16%|#5        | 32/202 [00:00<00:01, 131.77it/s]Loading weights: 100%|##########| 202/202 [00:00<00:00, 832.71it/s]
+Eval run: dev_D_final (openai), pipeline_config=D, 120 questions
+Status breakdown: {'answered': 72, 'refused_unverified': 22, 'refused_off_book': 26}
+Retrieval hit rate @5: 0.97 (n=95)
+RAGAS faithfulness: 0.75 (n=72)
+Refusal accuracy (off-book): 1.00 (n=25)
+False refusal rate (answerable): 0.24 (n=95)
+Hallucination rate (unsupported sentences): 0.24 (n=72)
+Style: 0.11 pass rate (n=72), mean FK 4.31, mean max-sentence 16.7 words, mean vocab coverage 0.93
+Readability (answer text, any config): mean FK 4.31 (n=72), mean sentence length 8.7 words, mean max-sentence 16.7 words (n=72)
+LLM calls: 584 (529 cache hits, 55 misses), 54749 prompt tokens, 8342 completion tokens
+Wall time: 74.0s
+Results written to D:\Research\MSc\textbook-tutor\backend\eval\runs\dev_D_final_20260912T193944Z.jsonl

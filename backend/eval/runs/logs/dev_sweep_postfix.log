@@ -1,0 +1,36 @@
+=== starting pipeline_config=C (post-fix) 2026-09-12T18:42:32Z ===
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 30 files:   0%|          | 0/30 [00:00<?, ?it/s]Fetching 30 files: 100%|##########| 30/30 [00:00<00:00, 3099.70it/s]
+Loading weights:   0%|          | 0/391 [00:00<?, ?it/s]Loading weights:   1%|1         | 5/391 [00:01<02:02,  3.16it/s]Loading weights: 100%|##########| 391/391 [00:01<00:00, 244.06it/s]
+Eval run: dev_C_fixed (openai), pipeline_config=C, 120 questions
+Status breakdown: {'answered': 118, 'refused_off_book': 2}
+Retrieval hit rate @5: 0.97 (n=95)
+RAGAS faithfulness: 0.70 (n=118)
+Refusal accuracy (off-book): 0.08 (n=25)
+False refusal rate (answerable): 0.00 (n=95)
+Hallucination rate: no verification reports in this run (pipeline_config B/C skip the verifier)
+Style: 0.00 pass rate (n=118), mean FK 4.86, mean max-sentence 28.2 words, mean vocab coverage 0.91
+Readability (answer text, any config): mean FK 4.86 (n=118), mean sentence length 10.7 words, mean max-sentence 28.2 words (n=118)
+LLM calls: 708 (178 cache hits, 530 misses), 1000315 prompt tokens, 67230 completion tokens
+Wall time: 517.6s
+Results written to D:\Research\MSc\textbook-tutor\backend\eval\runs\dev_C_fixed_20260912T185752Z.jsonl
+=== finished pipeline_config=C (post-fix) 2026-09-12T18:57:54Z exit=0 ===
+=== starting pipeline_config=D (post-fix) 2026-09-12T18:57:54Z ===
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 30 files:   0%|          | 0/30 [00:00<?, ?it/s]Fetching 30 files: 100%|##########| 30/30 [00:00<00:00, 3614.22it/s]
+Loading weights:   0%|          | 0/391 [00:00<?, ?it/s]Loading weights:   1%|1         | 5/391 [00:01<01:49,  3.52it/s]Loading weights: 100%|##########| 391/391 [00:01<00:00, 272.87it/s]
+Loading weights:   0%|          | 0/202 [00:00<?, ?it/s]Loading weights:  12%|#2        | 25/202 [00:00<00:00, 240.03it/s]Loading weights:  25%|##4       | 50/202 [00:00<00:00, 228.60it/s]Loading weights: 100%|##########| 202/202 [00:00<00:00, 930.18it/s]
+Eval run: dev_D_fixed (openai), pipeline_config=D, 120 questions
+Status breakdown: {'answered': 30, 'refused_unverified': 88, 'refused_off_book': 2}
+Retrieval hit rate @5: 0.97 (n=95)
+RAGAS faithfulness: 0.73 (n=30)
+Refusal accuracy (off-book): 0.76 (n=25)
+False refusal rate (answerable): 0.75 (n=95)
+Hallucination rate (unsupported sentences): 0.01 (n=30)
+Style: 0.00 pass rate (n=30), mean FK 4.69, mean max-sentence 27.1 words, mean vocab coverage 0.91
+Readability (answer text, any config): mean FK 4.69 (n=30), mean sentence length 10.4 words, mean max-sentence 27.1 words (n=30)
+LLM calls: 641 (512 cache hits, 129 misses), 279425 prompt tokens, 13149 completion tokens
+Wall time: 253.5s
+Results written to D:\Research\MSc\textbook-tutor\backend\eval\runs\dev_D_fixed_20260912T190254Z.jsonl
+=== finished pipeline_config=D (post-fix) 2026-09-12T19:02:56Z exit=0 ===
+ALL_DONE

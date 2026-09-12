@@ -1,0 +1,67 @@
+=== starting pipeline_config=A 2026-09-12T17:25:37Z ===
+Eval run: dev_A (openai), pipeline_config=A, 120 questions
+Status breakdown: {'answered': 120}
+Retrieval hit rate @5: 0.00 (n=95)
+RAGAS faithfulness: no answered questions to score
+Refusal accuracy (off-book): 0.00 (n=25)
+False refusal rate (answerable): 0.00 (n=95)
+Hallucination rate: no verification reports in this run (pipeline_config B/C skip the verifier)
+Style: no answered questions with a style report to summarize (pipeline_config A/B skip style_check)
+Readability (answer text, any config): mean FK 10.48 (n=88), mean sentence length 17.8 words, mean max-sentence 21.5 words (n=120)
+LLM calls: 120 (2 cache hits, 118 misses), 6550 prompt tokens, 7243 completion tokens
+Wall time: 163.0s
+Results written to D:\Research\MSc\textbook-tutor\backend\eval\runs\dev_A_20260912T172823Z.jsonl
+=== finished pipeline_config=A 2026-09-12T17:28:25Z exit=0 ===
+=== starting pipeline_config=B 2026-09-12T17:28:25Z ===
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 30 files:   0%|          | 0/30 [00:00<?, ?it/s]Fetching 30 files: 100%|##########| 30/30 [00:00<00:00, 4612.50it/s]
+Loading weights:   0%|          | 0/391 [00:00<?, ?it/s]Loading weights:   1%|1         | 5/391 [00:01<01:31,  4.21it/s]Loading weights: 100%|##########| 391/391 [00:01<00:00, 322.71it/s]
+Eval run: dev_B (openai), pipeline_config=B, 120 questions
+Status breakdown: {'answered': 118, 'refused_off_book': 2}
+Retrieval hit rate @5: 0.97 (n=95)
+RAGAS faithfulness: 0.86 (n=118)
+Refusal accuracy (off-book): 0.08 (n=25)
+False refusal rate (answerable): 0.00 (n=95)
+Hallucination rate: no verification reports in this run (pipeline_config B/C skip the verifier)
+Style: no answered questions with a style report to summarize (pipeline_config A/B skip style_check)
+Readability (answer text, any config): mean FK 7.67 (n=11), mean sentence length 14.2 words, mean max-sentence 14.9 words (n=118)
+LLM calls: 354 (69 cache hits, 285 misses), 297622 prompt tokens, 18597 completion tokens
+Wall time: 127.8s
+Results written to D:\Research\MSc\textbook-tutor\backend\eval\runs\dev_B_20260912T173524Z.jsonl
+=== finished pipeline_config=B 2026-09-12T17:35:27Z exit=0 ===
+=== starting pipeline_config=C 2026-09-12T17:35:27Z ===
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 30 files:   0%|          | 0/30 [00:00<?, ?it/s]Fetching 30 files: 100%|##########| 30/30 [00:00<00:00, 2295.31it/s]
+Loading weights:   0%|          | 0/391 [00:00<?, ?it/s]Loading weights:   1%|1         | 5/391 [00:00<01:07,  5.74it/s]Loading weights: 100%|##########| 391/391 [00:00<00:00, 444.77it/s]
+Eval run: dev_C (openai), pipeline_config=C, 120 questions
+Status breakdown: {'answered': 118, 'refused_off_book': 2}
+Retrieval hit rate @5: 0.97 (n=95)
+RAGAS faithfulness: 0.65 (n=118)
+Refusal accuracy (off-book): 0.08 (n=25)
+False refusal rate (answerable): 0.00 (n=95)
+Hallucination rate: no verification reports in this run (pipeline_config B/C skip the verifier)
+Style: 0.02 pass rate (n=118), mean FK 5.0, mean max-sentence 27.5 words, mean vocab coverage 0.91
+Readability (answer text, any config): mean FK 5.0 (n=118), mean sentence length 11.5 words, mean max-sentence 27.5 words (n=118)
+LLM calls: 709 (160 cache hits, 549 misses), 1023807 prompt tokens, 74442 completion tokens
+Wall time: 548.8s
+Results written to D:\Research\MSc\textbook-tutor\backend\eval\runs\dev_C_20260912T175158Z.jsonl
+=== finished pipeline_config=C 2026-09-12T17:52:00Z exit=0 ===
+=== starting pipeline_config=D 2026-09-12T17:52:00Z ===
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 30 files:   0%|          | 0/30 [00:00<?, ?it/s]Fetching 30 files: 100%|##########| 30/30 [00:00<?, ?it/s]
+Loading weights:   0%|          | 0/391 [00:00<?, ?it/s]Loading weights:   1%|1         | 5/391 [00:01<02:19,  2.77it/s]Loading weights: 100%|##########| 391/391 [00:01<00:00, 216.18it/s]
+Loading weights:   0%|          | 0/202 [00:00<?, ?it/s]Loading weights:  14%|#3        | 28/202 [00:00<00:00, 208.24it/s]Loading weights: 100%|##########| 202/202 [00:00<00:00, 951.13it/s]
+Eval run: dev_D (openai), pipeline_config=D, 120 questions
+Status breakdown: {'answered': 5, 'refused_unverified': 113, 'refused_off_book': 2}
+Retrieval hit rate @5: 0.97 (n=95)
+RAGAS faithfulness: 0.96 (n=5)
+Refusal accuracy (off-book): 0.96 (n=25)
+False refusal rate (answerable): 0.96 (n=95)
+Hallucination rate (unsupported sentences): 0.16 (n=5)
+Style: 0.00 pass rate (n=5), mean FK 6.48, mean max-sentence 22.2 words, mean vocab coverage 0.92
+Readability (answer text, any config): mean FK 6.48 (n=5), mean sentence length 11.5 words, mean max-sentence 22.2 words (n=5)
+LLM calls: 602 (487 cache hits, 115 misses), 279505 prompt tokens, 10843 completion tokens
+Wall time: 345.0s
+Results written to D:\Research\MSc\textbook-tutor\backend\eval\runs\dev_D_20260912T175758Z.jsonl
+=== finished pipeline_config=D 2026-09-12T17:58:00Z exit=0 ===
+ALL_DONE

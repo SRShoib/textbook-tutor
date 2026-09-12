@@ -79,6 +79,33 @@ def test_sentence_and_word_splitting_matches_measure_style_py():
     )
 
 
+# --- is_scaffolding_sentence / content_sentences (Phase 6 fix, moved from
+# verify.py 2026-09-13 -- see module docstring on why the same scaffolding
+# that inflated verify_answer() also inflated the checks below) -----------
+
+
+def test_is_scaffolding_sentence_matches_documented_patterns():
+    assert style_check.is_scaffolding_sentence("Dear students, today we are in Unit 3, Lesson 2.") is True
+    assert style_check.is_scaffolding_sentence("I'll repeat that.") is True
+    assert style_check.is_scaffolding_sentence("Do you understand?") is True
+
+
+def test_is_scaffolding_sentence_leaves_factual_sentences_alone():
+    assert style_check.is_scaffolding_sentence("Rina likes to read science fiction books.") is False
+
+
+def test_content_sentences_drops_scaffolding_keeps_the_fact():
+    answer = (
+        "Dear students, I hope you are all doing well today! "
+        "We are in Unit 6, Lesson 2, page 36. "
+        'Now, to answer your question, "What is the capital city of Indonesia?" '
+        "The capital city of Indonesia is Jakarta. "
+        "I'll repeat that. "
+        "Do you understand?"
+    )
+    assert style_check.content_sentences(answer) == ["The capital city of Indonesia is Jakarta."]
+
+
 # --- check_sentence_length ------------------------------------------------
 
 
@@ -285,6 +312,37 @@ async def test_check_style_fails_on_sentence_length_and_skips_judge(monkeypatch)
     assert report.judge_ran is False  # judge is skipped — numeric failure is enough
     assert judge_calls == []
     assert any("word limit" in f for f in report.failures)
+
+
+@pytest.mark.asyncio
+async def test_check_style_ignores_scaffolding_sentence_length(monkeypatch):
+    # Phase 6 fix, 2026-09-13: a long question-echo/citation sentence must
+    # not fail the length check on its own — only the actual explanation's
+    # length counts. This is the dominant real-world failure this fixed:
+    # 54/62 dev-split "too hard" failures were this exact shape.
+    async def fake_book_vocabulary(book_id, grade):
+        return FIXED_VOCAB | {
+            "dear", "students", "hope", "you", "all", "doing", "well", "today",
+            "now", "to", "answer", "your", "question", "what", "does", "mean",
+        }
+
+    def fake_run_judge(answer, *, grade, provider="openai"):
+        return style_check._JudgeVerdict(suitable=True, reason="clear")
+
+    monkeypatch.setattr(style_check, "book_vocabulary", fake_book_vocabulary)
+    monkeypatch.setattr(style_check, "run_judge", fake_run_judge)
+    get_settings().style_max_sentence_words = 14
+
+    answer = (
+        "Dear students, I hope you all are doing well today! "
+        'Now, to answer your question, "What does a noun mean and how do we use it in a sentence?" '
+        "A noun is a naming word."
+    )
+    report = await style_check.check_style(answer, grade=5, book_id=uuid.uuid4())
+
+    assert report.passed is True
+    assert report.max_sentence_words == 6  # "A noun is a naming word." only
+    assert report.failures == []
 
 
 @pytest.mark.asyncio

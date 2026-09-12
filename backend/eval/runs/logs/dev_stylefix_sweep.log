@@ -1,0 +1,37 @@
+=== starting pipeline_config=C (dev, style-check fix) 2026-09-12T20:28:37Z ===
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 30 files:   0%|          | 0/30 [00:00<?, ?it/s]Fetching 30 files: 100%|##########| 30/30 [00:00<?, ?it/s]
+Loading weights:   0%|          | 0/391 [00:00<?, ?it/s]Loading weights:   1%|1         | 5/391 [00:01<02:32,  2.53it/s]Loading weights: 100%|##########| 391/391 [00:02<00:00, 194.27it/s]
+Eval run: styfix_dev_C (openai), pipeline_config=C, 120 questions
+Status breakdown: {'answered': 94, 'refused_off_book': 26}
+Retrieval hit rate @5: 0.97 (n=95)
+RAGAS faithfulness: 0.72 (n=94)
+Refusal accuracy (off-book): 1.00 (n=25)
+False refusal rate (answerable): 0.01 (n=95)
+Hallucination rate: no verification reports in this run (pipeline_config B/C skip the verifier)
+Style: 0.33 pass rate (n=94), mean FK 5.46, mean max-sentence 13.9 words, mean vocab coverage 0.96
+Readability (answer text, any config): mean FK 4.49 (n=94), mean sentence length 9.0 words, mean max-sentence 17.0 words (n=94)
+LLM calls: 604 (329 cache hits, 275 misses), 400348 prompt tokens, 31449 completion tokens
+Wall time: 245.5s
+Results written to D:\Research\MSc\textbook-tutor\backend\eval\runs\styfix_dev_C_20260912T203607Z.jsonl
+=== finished pipeline_config=C (dev, style-check fix) 2026-09-12T20:36:10Z exit=0 ===
+=== starting pipeline_config=D (dev, style-check fix) 2026-09-12T20:36:10Z ===
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 30 files:   0%|          | 0/30 [00:00<?, ?it/s]Fetching 30 files: 100%|##########| 30/30 [00:00<00:00, 3745.03it/s]
+Loading weights:   0%|          | 0/391 [00:00<?, ?it/s]Loading weights:   1%|1         | 5/391 [00:01<02:05,  3.07it/s]Loading weights: 100%|##########| 391/391 [00:01<00:00, 235.56it/s]
+Loading weights:   0%|          | 0/202 [00:00<?, ?it/s]Loading weights:   6%|6         | 13/202 [00:00<00:01, 114.93it/s]Loading weights: 100%|##########| 202/202 [00:00<00:00, 1063.28it/s]
+Eval run: styfix_dev_D (openai), pipeline_config=D, 120 questions
+Status breakdown: {'answered': 68, 'refused_unverified': 26, 'refused_off_book': 26}
+Retrieval hit rate @5: 0.97 (n=95)
+RAGAS faithfulness: 0.71 (n=68)
+Refusal accuracy (off-book): 1.00 (n=25)
+False refusal rate (answerable): 0.28 (n=95)
+Hallucination rate (unsupported sentences, mean): 0.23 (n=68)
+Hallucination rate (severe -- nothing in the message supported): 0.00 (n=68)
+Style: 0.38 pass rate (n=68), mean FK 5.03, mean max-sentence 12.9 words, mean vocab coverage 0.96
+Readability (answer text, any config): mean FK 4.39 (n=68), mean sentence length 8.7 words, mean max-sentence 16.6 words (n=68)
+LLM calls: 603 (557 cache hits, 46 misses), 74069 prompt tokens, 3644 completion tokens
+Wall time: 123.7s
+Results written to D:\Research\MSc\textbook-tutor\backend\eval\runs\styfix_dev_D_20260912T203830Z.jsonl
+=== finished pipeline_config=D (dev, style-check fix) 2026-09-12T20:38:32Z exit=0 ===
+ALL_DONE

@@ -52,6 +52,35 @@ Label order: sentence-transformers' nli-deberta*/nli-roberta* cross-encoders
       the model's own usage example on its Hugging Face model card) — there
       is no way to read this back out of the model config itself, so it is
       asserted here as a constant rather than derived.
+
+Why scaffolding sentences are excluded before scoring (Phase 6 fix, found
+      via dev-split error analysis): style_guide.md's §3.1/§3.2/§3.3/§3.5
+      structural rules — which v1_stage2.txt's prompt follows — put fixed
+      pedagogical framing around the actual answer: a greeting + lesson
+      citation, a "do you understand?"-style comprehension check, an
+      "I'll repeat that" marker, a closing sign-off. None of that is a claim
+      about the book; none of it CAN be entailed by the book, even when it's
+      accurate, because ingest.py's chunk header ("Unit N, Lesson M: Title")
+      is stripped before _premise_sentences() ever runs (same drop as
+      style_check.book_vocabulary()) — so a correct citation sentence has no
+      premise sentence to match against regardless. Scoring these sentences
+      anyway is what made settings.verify_supported_ratio=0.8 unreachable
+      even for a fully correct answer: a 120-question dev run showed 91/95
+      answerable questions wrongly refused, and the failing sentences were,
+      without exception, this scaffolding, not the actual fact (e.g. "The
+      capital city of Indonesia is Jakarta." alone scored 0.997 entailment;
+      wrapped in the same answer's framing sentence, the same claim scored
+      0.005 — NLI scores a whole hypothesis against a whole premise, so
+      unrelated wrapping text tanks the score regardless of the fact buried
+      inside it). is_scaffolding_sentence() is a closed, evidence-grounded
+      pattern list tied to those four documented structural rules, not an
+      open-ended filter. It originally lived here; moved to style_check.py
+      2026-09-13 once the exact same scaffolding turned out to be inflating
+      sentence-length/FK failures there too (the question-echo pattern
+      specifically — see style_check.py's docstring) — style_check.py is
+      the lower-level module this one already imports sentences() from, so
+      moving it there (not the reverse) avoids a circular import. Imported
+      back under the same name so nothing else in this file changed.
 """
 
 from __future__ import annotations
@@ -61,7 +90,7 @@ from dataclasses import dataclass, field
 
 from app.core.config import get_settings
 from app.models.chunk import Chunk
-from app.pipeline.style_check import sentences
+from app.pipeline.style_check import is_scaffolding_sentence, sentences
 
 _LABELS = ["contradiction", "entailment", "neutral"]
 _ENTAILMENT_INDEX = _LABELS.index("entailment")
@@ -92,6 +121,10 @@ class VerificationReport:
     passed: bool
     supported_ratio: float
     sentences: list[SentenceVerification] = field(default_factory=list)
+    # Sentences is_scaffolding_sentence() pulled out before scoring — kept
+    # here (not just dropped) so an eval run's JSONL stays a complete record
+    # of what the answer said, for the thesis's error-analysis chapter.
+    skipped_sentences: list[str] = field(default_factory=list)
 
 
 def _premise_sentences(chunks: list[Chunk]) -> list[tuple[str, str]]:
@@ -139,13 +172,19 @@ def verify_sentences(sentence_list: list[str], chunks: list[Chunk]) -> list[Sent
 
 async def verify_answer(answer: str, context_chunks: list[Chunk]) -> VerificationReport:
     settings = get_settings()
-    sentence_list = sentences(answer)
+    all_sentences = sentences(answer)
+    skipped = [s for s in all_sentences if is_scaffolding_sentence(s)]
+    sentence_list = [s for s in all_sentences if not is_scaffolding_sentence(s)]
     if not sentence_list:
-        # Nothing to disprove — same "empty input passes" shape as
-        # style_check.check_vocab_coverage.
-        return VerificationReport(passed=True, supported_ratio=1.0, sentences=[])
+        # Nothing left to check — either an empty answer (same "empty input
+        # passes" shape as style_check.check_vocab_coverage) or an answer
+        # that was scaffolding from end to end, which is check_style's
+        # problem (a real answer sentence missing entirely), not verify's.
+        return VerificationReport(passed=True, supported_ratio=1.0, sentences=[], skipped_sentences=skipped)
 
     results = await asyncio.to_thread(verify_sentences, sentence_list, context_chunks)
     supported_ratio = sum(1 for r in results if r.supported) / len(results)
     passed = supported_ratio >= settings.verify_supported_ratio
-    return VerificationReport(passed=passed, supported_ratio=round(supported_ratio, 3), sentences=results)
+    return VerificationReport(
+        passed=passed, supported_ratio=round(supported_ratio, 3), sentences=results, skipped_sentences=skipped
+    )

@@ -38,6 +38,27 @@ Why vocabulary coverage is checked against chunks.text plus the five real
       may not appear inside the story itself. Folding in the few-shot
       answers' vocabulary keeps the check aligned with the same voice
       stage 2 is asked to imitate.
+
+Why is_scaffolding_sentence()/content_sentences() live here, not just in
+      verify.py (Phase 6 fix, 2026-09-13, found via dev-split error
+      analysis): verify.py originally excluded pedagogical scaffolding
+      (greeting, lesson citation, "I'll repeat that", comprehension checks —
+      see the pattern list below) from its own entailment check, but the
+      SAME scaffolding was still being counted here, toward
+      sentence-length/vocab/FK. The dominant cause turned out to be the
+      question-echo pattern specifically: "Now, to answer your question,
+      '<the entire original question restated>'" is frequently 15-20 words
+      on its own, regardless of how simple the actual answer is — 54 of 62
+      dev-split "too hard" failures had this exact sentence as their
+      longest. A citation/greeting/repeat-marker sentence being wordy isn't
+      a grade-adaptation failure any more than it's a hallucination — it's
+      fixed template text, not something stage 2 chose to write at length —
+      so check_style() now scores content_sentences() (scaffolding
+      excluded), the same standard verify.py already holds itself to.
+      is_scaffolding_sentence() moved here (the lower-level module
+      verify.py already imports sentences() from) so both can use it
+      without a circular import; verify.py re-imports it under the same
+      name so nothing there had to change.
 """
 
 from __future__ import annotations
@@ -62,7 +83,16 @@ STYLE_JUDGE_PROMPT_VERSION = "v1_style_judge"
 # WORD_RE, strip_bangla_keep_punct) — see the module docstring on why this
 # is a copy, not an import, and how it's kept from drifting.
 _BANGLA_RE = re.compile(r"[ঀ-৿]")
-_SENT_SPLIT_RE = re.compile(r"(?<=[.!?।])\s+")
+# Splits after terminal punctuation, and also after terminal punctuation
+# immediately followed by a closing quote mark (Phase 6 fix, found via
+# dev-split error analysis): stage 2's answers echo the student's question
+# in quotes before answering it — 'You asked, "...?" The answer is, X.' —
+# and the un-augmented lookbehind never matched at the '?"' boundary, so
+# that whole sentence stayed one long, noisy blob that verify.py's NLI
+# check then failed even when X was correct. Keeping this in sync with
+# measure_style.py's copy is what test_style_check.py's cross-validation
+# test enforces.
+_SENT_SPLIT_RE = re.compile(r'(?<=[.!?।])\s+|(?<=[.!?।]["”’\'])\s+')
 _WORD_RE = re.compile(r"[A-Za-zঀ-৿']+")
 
 
@@ -76,6 +106,52 @@ def sentences(text: str) -> list[str]:
 
 def words(text: str) -> list[str]:
     return _WORD_RE.findall(text)
+
+
+# Each pattern below is evidenced by one named style_guide.md structural
+# rule, not a general-purpose filler detector — see verify.py's original
+# module docstring (moved here 2026-09-13) for the full evidence trail:
+# §3.1 opening move (greeting, lesson citation), §3.2/§3.3 core explanation
+# (heavy repetition: question echo, "I'll repeat that"), §3.2 comprehension
+# check, §3.5 closing move.
+_SCAFFOLDING_PATTERNS = [
+    re.compile(r"^(dear students|hello,?\s*(dear\s+)?students|hi,?\s*(dear\s+)?students)\b", re.IGNORECASE),
+    re.compile(r"^(hello|hi)[!.]?\s*(dear students)?[,!.]?\s*$", re.IGNORECASE),
+    re.compile(r"i hope you('re| are)( all)? (doing well|fine|well)", re.IGNORECASE),
+    re.compile(
+        r"^(now,?\s*)?let('s| us)\s+(begin|start|get started( with)?|get ready for|focus on)\s+(our\s+)?lesson\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bunit\s+\d+,?\s*lesson\s+\d+\b", re.IGNORECASE),
+    re.compile(r"\bon page\s+\d+\b", re.IGNORECASE),
+    re.compile(r"^we are in class\s+\d+\b.*\b(learning about|studying)\b", re.IGNORECASE),
+    re.compile(r'^you asked\b.*\?["”’]?\s*$', re.IGNORECASE),
+    re.compile(r"^(now,?\s*)?(let'?s|to) answer (the|your) question\b.*\?[\"”’]?\s*$", re.IGNORECASE),
+    re.compile(r"^(i'?ll|i will|let me)\s+repeat\b", re.IGNORECASE),
+    re.compile(r"^(do you|does everyone)\s+understand\??\s*$", re.IGNORECASE),
+    re.compile(r"^does that make sense\??\s*$", re.IGNORECASE),
+    re.compile(r"^(now,?\s*)?can (anyone|you) tell me\b", re.IGNORECASE),
+    re.compile(r"^now,?\s*tell me\b", re.IGNORECASE),
+    re.compile(r"^(so,?\s*)?what (have|did) we (learn|learned) today\b", re.IGNORECASE),
+    re.compile(r"^(great job|well done|good job)\b", re.IGNORECASE),
+]
+
+
+def is_scaffolding_sentence(sentence: str) -> bool:
+    """True for the fixed pedagogical framing style_guide.md's structural
+    rules put around an answer (greeting, lesson citation, repeat marker,
+    comprehension check, closing) — see module docstring for why these are
+    excluded from both verification and the readability checks below
+    rather than scored as if they were content."""
+    return any(pattern.search(sentence) for pattern in _SCAFFOLDING_PATTERNS)
+
+
+def content_sentences(text: str) -> list[str]:
+    """sentences(text) with scaffolding sentences dropped — what
+    check_sentence_length/check_vocab_coverage/check_fk_grade should score,
+    since a child's reading burden is set by the explanation, not by the
+    fixed greeting/citation/repeat-marker text wrapped around it."""
+    return [s for s in sentences(text) if not is_scaffolding_sentence(s)]
 
 
 # --- individual checks ---------------------------------------------------
@@ -215,7 +291,13 @@ async def check_style(
     settings = get_settings()
     failures: list[str] = []
 
-    max_words, mean_words = check_sentence_length(answer)
+    # Scored on the explanation only — scaffolding (greeting, citation,
+    # repeat marker, comprehension check) dropped first. See module
+    # docstring: a wordy question-echo sentence isn't a grade-adaptation
+    # failure, it's fixed template text.
+    content = " ".join(content_sentences(answer))
+
+    max_words, mean_words = check_sentence_length(content)
     if max_words > settings.style_max_sentence_words:
         failures.append(
             f"a sentence is {max_words} words long, over the "
@@ -223,7 +305,7 @@ async def check_style(
         )
 
     vocab = await book_vocabulary(book_id, grade)
-    coverage, oov = check_vocab_coverage(answer, vocab)
+    coverage, oov = check_vocab_coverage(content, vocab)
     if coverage < settings.style_vocab_coverage_min:
         preview = ", ".join(oov[:8])
         failures.append(
@@ -231,7 +313,7 @@ async def check_style(
             f"(need {settings.style_vocab_coverage_min:.0%}); unfamiliar words: {preview}"
         )
 
-    fk = check_fk_grade(answer)
+    fk = check_fk_grade(content)
     if fk is not None and fk > settings.style_fk_max:
         failures.append(
             f"reading level (Flesch-Kincaid {fk}) is above the "

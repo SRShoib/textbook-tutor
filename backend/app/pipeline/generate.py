@@ -47,6 +47,21 @@ Why load_style_rules() can drop section 3.1 (opening move) per call: §3.1
       has nothing to render into. The evidence itself is left untouched in
       style_guide.md; this is a scoping decision made in the application
       layer, not a correction to the research finding.
+
+Why render_stage2_prompt() takes source_citation as a plain string, not a
+      Chunk (Phase 6 fix, found via dev-split error analysis): the opening-
+      move rule above tells stage 2 to name the unit/lesson/page, but stage
+      2 has no context_chunks to read one from — so, unobserved until a
+      120-question run surfaced it, the model was inventing a citation
+      outright, and always the same two fabricated ones ("Unit 3, Lesson 2,
+      page 45" / "Unit 5, Lesson 2, page 45") regardless of the real source.
+      Passing the true citation as a formatted string (built in graph.py
+      from retrieval.top_chunks[0], the single best-matching chunk) is not a
+      book fact stage 1 must first produce — it's retrieval metadata the
+      system already has independent of any LLM call, the same status as
+      the sources array a message stores. Stage 2 still cannot read the
+      book's content; it can now just correctly name where the content it
+      was already given came from.
 """
 
 from __future__ import annotations
@@ -62,6 +77,7 @@ from app.pipeline.llm import LLMResult, call_llm
 
 STAGE1_PROMPT_VERSION = "v1_stage1"
 STAGE2_PROMPT_VERSION = "v1_stage2"
+PLAIN_LLM_PROMPT_VERSION = "v1_plain_llm"
 
 # backend/app/pipeline/generate.py -> parents[2] is backend/, where
 # prompts/ lives (matches the repo layout in CLAUDE.md).
@@ -102,6 +118,30 @@ def generate_stage1(question: str, context_chunks: list[Chunk], *, provider: str
     prompt = render_stage1_prompt(question, context)
     result = call_llm(prompt, prompt_version=STAGE1_PROMPT_VERSION, provider=provider)
     return Stage1Result(answer=result.text, llm=result)
+
+
+# --- config A: plain LLM, no book, no grade voice, no verifier -----------
+# Phase 6's ablation baseline (project-guidelines.md 8.2, config "A. Plain
+# LLM") — the question goes straight to the LLM with no retrieved context
+# and no teacher-voice framing, so the results table has something to show
+# the other three contributions improve on.
+
+
+@dataclass(frozen=True)
+class PlainLLMResult:
+    answer: str
+    llm: LLMResult
+
+
+def render_plain_llm_prompt(question: str) -> str:
+    template = load_prompt(PLAIN_LLM_PROMPT_VERSION)
+    return template.format(question=question)
+
+
+def generate_plain_llm(question: str, *, provider: str = "openai") -> PlainLLMResult:
+    prompt = render_plain_llm_prompt(question)
+    result = call_llm(prompt, prompt_version=PLAIN_LLM_PROMPT_VERSION, provider=provider)
+    return PlainLLMResult(answer=result.text, llm=result)
 
 
 # --- stage 2: grade-voice rewrite --------------------------------------
@@ -270,17 +310,23 @@ def format_fewshot(examples: list[FewshotExample]) -> str:
     return "\n\n".join(f"Question: {ex.question}\nTeacher: {ex.teacher_answer}" for ex in examples)
 
 
-_FIRST_TURN_NOTE = (
+_FIRST_TURN_NOTE_TEMPLATE = (
     "This is the first message in this conversation. Following the opening-"
     "move rule below, begin with a brief one-time greeting and name the "
-    "unit, lesson and page this comes from — but skip the song step "
-    "described there entirely; that does not apply to a text chat."
+    "unit, lesson and page this comes from — it is {source_citation}; use "
+    "exactly that, do not guess or invent a different one — but skip the "
+    "song step described there entirely; that does not apply to a text chat."
 )
 _FOLLOW_UP_TURN_NOTE = (
     "This is a follow-up in an ongoing conversation, not the start of a "
     "lesson. Do not repeat the greeting and do not name the unit, lesson or "
     "page again — go straight into answering."
 )
+# Fallback only: route_after_retrieve guarantees at least one scored chunk
+# whenever stage 2 runs (the off-book gate has already passed), so this
+# should never actually reach the model — it exists so a malformed caller
+# fails soft with a vague instruction instead of a KeyError.
+_DEFAULT_SOURCE_CITATION = "the source lesson"
 
 
 def render_stage2_prompt(
@@ -290,6 +336,7 @@ def render_stage2_prompt(
     grade: int,
     is_first_turn: bool = True,
     feedback: str | None = None,
+    source_citation: str = _DEFAULT_SOURCE_CITATION,
 ) -> str:
     template = load_prompt(STAGE2_PROMPT_VERSION)
     grade_profile = load_grade_profile(grade)
@@ -304,9 +351,14 @@ def render_stage2_prompt(
             f"\nYour previous attempt did not pass the style check: {feedback}\n"
             "Rewrite the answer to fix this, without changing any fact.\n"
         )
+    turn_note = (
+        _FIRST_TURN_NOTE_TEMPLATE.format(source_citation=source_citation)
+        if is_first_turn
+        else _FOLLOW_UP_TURN_NOTE
+    )
     return template.format(
         grade=grade,
-        turn_note=_FIRST_TURN_NOTE if is_first_turn else _FOLLOW_UP_TURN_NOTE,
+        turn_note=turn_note,
         style_rules=load_style_rules(include_opening_move=is_first_turn),
         grade_profile=grade_profile,
         fewshot=format_fewshot(load_fewshot(grade)),
@@ -330,9 +382,15 @@ def generate_stage2(
     is_first_turn: bool = True,
     provider: str = "openai",
     feedback: str | None = None,
+    source_citation: str = _DEFAULT_SOURCE_CITATION,
 ) -> Stage2Result:
     prompt = render_stage2_prompt(
-        question, stage1_answer, grade=grade, is_first_turn=is_first_turn, feedback=feedback
+        question,
+        stage1_answer,
+        grade=grade,
+        is_first_turn=is_first_turn,
+        feedback=feedback,
+        source_citation=source_citation,
     )
     result = call_llm(prompt, prompt_version=STAGE2_PROMPT_VERSION, provider=provider)
     return Stage2Result(answer=result.text, llm=result)

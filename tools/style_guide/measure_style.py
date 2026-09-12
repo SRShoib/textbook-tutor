@@ -33,7 +33,12 @@ from pathlib import Path
 
 # Bangla unicode block
 BANGLA_RE = re.compile(r"[\u0980-\u09FF]")
-SENT_SPLIT_RE = re.compile(r"(?<=[.!?।])\s+")
+# Kept identical to backend/app/pipeline/style_check.py's _SENT_SPLIT_RE --
+# test_style_check.py asserts the two never drift apart. Splits after
+# terminal punctuation, and also after terminal punctuation immediately
+# followed by a closing quote mark (a quoted question inside a longer
+# sentence, e.g. '"...?" The answer is').
+SENT_SPLIT_RE = re.compile(r'(?<=[.!?।])\s+|(?<=[.!?।]["”’\'])\s+')
 WORD_RE = re.compile(r"[A-Za-z\u0980-\u09FF']+")
 
 # very rough English stopword list, enough to surface content words
