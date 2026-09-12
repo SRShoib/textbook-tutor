@@ -1,10 +1,11 @@
 """
-What: wires rewrite.py, retrieve.py, generate.py's two stages and
-      style_check.py into one LangGraph, per CLAUDE.md's fixed pipeline
-      flow:
+What: wires rewrite.py, retrieve.py, generate.py's two stages, style_check.py
+      and verify.py into one LangGraph, per CLAUDE.md's fixed pipeline flow:
           rewrite -> retrieve -> off-book gate -> stage 1 -> stage 2
-          -> style_check -> (pass: done | fail, retries left: back to
-             stage 2 with the reason | fail, out of retries: done anyway)
+          -> style_check -> (fail, retries left: back to stage 2 with the
+             reason | pass or out of retries: continue) -> verify
+          -> (supported: done | partial, retries left: back to stage 2 with
+             which sentences failed | partial, out of retries: refused)
       run_pipeline() is the one entry point the API route and eval/runner.py
       both call.
 
@@ -14,27 +15,52 @@ Why the gate is a graph edge, not an if-statement inside generate.py:
       spend a paid call on a question that gets refused anyway. A LangGraph
       conditional edge keeps that skip explicit, and keeps
       route_after_retrieve() testable as a plain function, independent of
-      LangGraph. route_after_style_check() is the same shape for the
-      style-check retry loop.
+      LangGraph. route_after_style_check() and route_after_verify() are the
+      same shape for their respective retry loops.
 
 Why a style-check failure still ends in status=answered, not a new status:
       messages.status's four values are fixed by CLAUDE.md, and
-      'low_confidence' is reserved for Phase 4's verifier (a different
-      failure mode — unsupported by the book, not merely hard to read). A
-      correct answer that is still a little too long for the grade should
-      still reach the child; the failing StyleReport is stored on the
-      message (in messages.readability) so error analysis can count these
-      separately from a clean pass.
+      'low_confidence' is not produced by anything built yet. A correct
+      answer that is still a little too long for the grade should still
+      reach the child; the failing StyleReport is stored on the message (in
+      messages.readability) so error analysis can count these separately
+      from a clean pass. 'refused_unverified' is a different failure mode —
+      unsupported by the book, not merely hard to read — and verify_node can
+      still downgrade an already-answered, style-passing message to it.
+
+Why verify's retry rejoins the stage2 -> style_check loop instead of a
+      separate stage2 -> verify path: a regenerated answer that fixes an
+      unsupported sentence can just as easily come out too long or too hard
+      for the grade, so it should be re-style-checked before it's shown, not
+      just re-verified. style_attempts and verify_attempts are counted
+      separately (style_max_retries and verify_max_retries are independent
+      config values), so the two loops can't silently steal budget from each
+      other; the worst case is bounded at
+      (style_max_retries + 1) * (verify_max_retries + 1) stage 2 calls.
+
+Why stage2_node reads state["retry_feedback"] instead of deriving it from
+      state["style"] itself (as it did before verify.py existed): once
+      verify_node exists, a retry back to stage 2 can be triggered by either
+      check, and by the time it runs, state still holds the *previous*
+      (passing) style report from the loop iteration verify just failed on.
+      Deriving feedback from state["style"] directly would silently re-send
+      stale, already-fixed style feedback instead of the verifier's actual
+      complaint. Both style_check_node and verify_node now write
+      retry_feedback every time they run (None on a pass) so it always
+      reflects whichever check most recently failed.
+
+Why refused_unverified keeps the generated (ungrounded) answer text rather
+      than a canned refusal string: unlike the off-book gate, this fires
+      after generation, and the actual hallucinated text is exactly what
+      Phase 6's error analysis needs to see. Only `status` marks it as
+      refused; how a client displays a refused_unverified message is a
+      Phase 7 decision.
 
 Why session_id is optional: the eval runner runs each question as an
       isolated turn with no session history to rewrite against — passing
       session_id=None makes rewrite_node skip straight past the LLM call
       (see rewrite.needs_rewrite: empty history never rewrites), so eval
       runs stay single-turn without a special-cased code path here.
-
-Only three of the four messages.status values are reachable this phase:
-      'answered' and 'refused_off_book' (Phase 2), plus 'low_confidence'
-      still waits on Phase 4's verifier, which also owns 'refused_unverified'.
 """
 
 from __future__ import annotations
@@ -54,6 +80,7 @@ from app.pipeline.llm import LLMResult
 from app.pipeline.retrieve import RetrievalResult, hybrid_search
 from app.pipeline.rewrite import load_history, rewrite_question
 from app.pipeline.style_check import StyleReport, check_style
+from app.pipeline.verify import VerificationReport, verify_answer
 
 # No LLM call happens on this branch, so this is UI copy, not a prompt —
 # it doesn't belong in prompts/ (CLAUDE.md reserves that for text sent to an
@@ -78,6 +105,9 @@ class GraphState(TypedDict, total=False):
     final_llm: LLMResult | None
     style: StyleReport
     style_attempts: int
+    verification: VerificationReport
+    verify_attempts: int
+    retry_feedback: str | None
 
 
 async def rewrite_node(state: GraphState) -> dict:
@@ -114,8 +144,6 @@ async def stage1_node(state: GraphState) -> dict:
 
 
 async def stage2_node(state: GraphState) -> dict:
-    style: StyleReport | None = state.get("style")
-    feedback = "; ".join(style.failures) if style is not None else None
     result = await asyncio.to_thread(
         generate_stage2,
         state["search_query"],
@@ -123,7 +151,7 @@ async def stage2_node(state: GraphState) -> dict:
         grade=state["grade"],
         is_first_turn=state.get("is_first_turn", True),
         provider=state.get("provider", "openai"),
-        feedback=feedback,
+        feedback=state.get("retry_feedback"),
     )
     return {"answer": result.answer, "final_llm": result.llm, "status": MessageStatus.ANSWERED}
 
@@ -136,7 +164,26 @@ async def style_check_node(state: GraphState) -> dict:
         book_id=state["book_id"],
         provider=state.get("provider", "openai"),
     )
-    return {"style": report, "style_attempts": attempts}
+    feedback = "; ".join(report.failures) if not report.passed else None
+    return {"style": report, "style_attempts": attempts, "retry_feedback": feedback}
+
+
+async def verify_node(state: GraphState) -> dict:
+    attempts = state.get("verify_attempts", 0) + 1
+    report = await verify_answer(state["answer"], state["retrieval"].context_chunks)
+    feedback = None
+    if not report.passed:
+        unsupported = [s.sentence for s in report.sentences if not s.supported]
+        feedback = (
+            "The book does not support the following sentence(s): "
+            + " | ".join(unsupported)
+            + ". Remove or correct them without adding any new facts."
+        )
+    return {"verification": report, "verify_attempts": attempts, "retry_feedback": feedback}
+
+
+async def mark_unverified_node(state: GraphState) -> dict:
+    return {"status": MessageStatus.REFUSED_UNVERIFIED}
 
 
 async def refuse_node(state: GraphState) -> dict:
@@ -165,6 +212,19 @@ def route_after_style_check(state: GraphState) -> Literal["retry", "end"]:
     return "retry"
 
 
+def route_after_verify(state: GraphState) -> Literal["retry", "supported", "unverified"]:
+    """Pure routing decision: below verify_supported_ratio, regenerate
+    stage 2 (retry_feedback names which sentences the book doesn't support)
+    up to verify_max_retries times AFTER the first check, then give up and
+    refuse rather than show an answer the book doesn't back."""
+    report = state["verification"]
+    if report.passed:
+        return "supported"
+    if state["verify_attempts"] > get_settings().verify_max_retries:
+        return "unverified"
+    return "retry"
+
+
 def build_sources(retrieval: RetrievalResult) -> list[dict]:
     """The pre-expansion top hits, not the expanded context — what a message
     cites should point at the specific lessons that matched, not every
@@ -190,13 +250,19 @@ _graph.add_node("retrieve", retrieve_node)
 _graph.add_node("stage1", stage1_node)
 _graph.add_node("stage2", stage2_node)
 _graph.add_node("style_check", style_check_node)
+_graph.add_node("verify", verify_node)
+_graph.add_node("mark_unverified", mark_unverified_node)
 _graph.add_node("refuse", refuse_node)
 _graph.add_edge(START, "rewrite")
 _graph.add_edge("rewrite", "retrieve")
 _graph.add_conditional_edges("retrieve", route_after_retrieve, {"generate": "stage1", "refuse": "refuse"})
 _graph.add_edge("stage1", "stage2")
 _graph.add_edge("stage2", "style_check")
-_graph.add_conditional_edges("style_check", route_after_style_check, {"retry": "stage2", "end": END})
+_graph.add_conditional_edges("style_check", route_after_style_check, {"retry": "stage2", "end": "verify"})
+_graph.add_conditional_edges(
+    "verify", route_after_verify, {"retry": "stage2", "supported": END, "unverified": "mark_unverified"}
+)
+_graph.add_edge("mark_unverified", END)
 _graph.add_edge("refuse", END)
 _compiled = _graph.compile()
 
@@ -221,6 +287,8 @@ class PipelineResult:
     stage1_answer: str | None
     style: StyleReport | None
     style_attempts: int
+    verification: VerificationReport | None
+    verify_attempts: int
 
 
 async def run_pipeline(
@@ -257,4 +325,6 @@ async def run_pipeline(
         stage1_answer=final_state.get("stage1_answer"),
         style=final_state.get("style"),
         style_attempts=final_state.get("style_attempts", 0),
+        verification=final_state.get("verification"),
+        verify_attempts=final_state.get("verify_attempts", 0),
     )

@@ -34,6 +34,11 @@ langchain-core==1.6.2
 # would silently invalidate the measured 3.0-4.5 target.
 textstat==0.7.13
 
+# Pipeline (Phase 4: verify.py)
+# Already installed transitively via FlagEmbedding; pinned explicitly here
+# because verify.py now imports it directly.
+sentence-transformers==6.0.1
+
 # Tests
 pytest==8.3.4
 pytest-asyncio==0.25.0

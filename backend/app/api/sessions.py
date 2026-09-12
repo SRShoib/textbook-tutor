@@ -75,7 +75,7 @@ async def create_message(
         content=result.answer,
         status=result.status,
         sources=result.sources,
-        verification=None,
+        verification=asdict(result.verification) if result.verification is not None else None,
         readability=asdict(result.style) if result.style is not None else None,
         config_version=result.config_version,
         latency_ms=result.latency_ms,

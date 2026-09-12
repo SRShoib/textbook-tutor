@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     offbook_score_threshold: float = 0.35
     verify_entailment_threshold: float = 0.5
     verify_supported_ratio: float = 0.8
+    verify_max_retries: int = 1
     style_max_retries: int = 2
     # Measured in data/style_guide/style_guide.md section 2 (12 Ghore Boshe
     # Shikhi transcripts). Live here, not parsed from that file's prose

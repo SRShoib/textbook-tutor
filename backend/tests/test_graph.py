@@ -1,8 +1,9 @@
-"""Tests for pipeline/graph.py. route_after_retrieve, route_after_style_check
-and build_sources are tested as plain functions; run_pipeline is tested
-end-to-end through the compiled LangGraph with hybrid_search, generate_stage1,
-generate_stage2, check_style, load_history and rewrite_question all
-monkeypatched, so no DB, embedding model or LLM is ever touched.
+"""Tests for pipeline/graph.py. route_after_retrieve, route_after_style_check,
+route_after_verify and build_sources are tested as plain functions;
+run_pipeline is tested end-to-end through the compiled LangGraph with
+hybrid_search, generate_stage1, generate_stage2, check_style, verify_answer,
+load_history and rewrite_question all monkeypatched, so no DB, embedding
+model, LLM or NLI model is ever touched.
 CLAUDE.md: test pipeline/ functions, skip route tests."""
 
 import uuid
@@ -16,6 +17,7 @@ from app.pipeline.llm import LLMResult
 from app.pipeline.retrieve import RetrievalResult, ScoredChunk
 from app.pipeline.rewrite import RewriteResult
 from app.pipeline.style_check import StyleReport
+from app.pipeline.verify import SentenceVerification, VerificationReport
 
 
 def make_chunk(**overrides) -> Chunk:
@@ -57,6 +59,15 @@ def make_style_report(passed: bool, failures=None) -> StyleReport:
     )
 
 
+def make_verification_report(passed: bool, supported_ratio: float = 1.0, unsupported: list[str] | None = None) -> VerificationReport:
+    unsupported = unsupported or []
+    sentences = [
+        SentenceVerification(sentence=s, entailment_score=0.1, supported=False, best_lesson_id="u1-s1")
+        for s in unsupported
+    ]
+    return VerificationReport(passed=passed, supported_ratio=supported_ratio, sentences=sentences)
+
+
 def fake_llm_result(text: str, prompt_version: str) -> LLMResult:
     return LLMResult(
         text=text, model="gpt-test", provider="openai", prompt_version=prompt_version,
@@ -73,6 +84,8 @@ def restore_settings():
         "offbook_score_threshold": settings.offbook_score_threshold,
         "config_version": settings.config_version,
         "style_max_retries": settings.style_max_retries,
+        "verify_supported_ratio": settings.verify_supported_ratio,
+        "verify_max_retries": settings.verify_max_retries,
     }
     yield
     for k, v in original.items():
@@ -131,6 +144,30 @@ def test_route_after_style_check_failed_out_of_retries_ends():
     assert graph.route_after_style_check(state) == "end"
 
 
+# --- route_after_verify ------------------------------------------------
+
+
+def test_route_after_verify_supported_ends():
+    state = {"verification": make_verification_report(passed=True), "verify_attempts": 1}
+    assert graph.route_after_verify(state) == "supported"
+
+
+def test_route_after_verify_partial_with_retries_left_retries():
+    from app.core.config import get_settings
+
+    get_settings().verify_max_retries = 1
+    state = {"verification": make_verification_report(passed=False), "verify_attempts": 1}
+    assert graph.route_after_verify(state) == "retry"
+
+
+def test_route_after_verify_partial_out_of_retries_is_unverified():
+    from app.core.config import get_settings
+
+    get_settings().verify_max_retries = 1
+    state = {"verification": make_verification_report(passed=False), "verify_attempts": 2}
+    assert graph.route_after_verify(state) == "unverified"
+
+
 # --- build_sources -------------------------------------------------------
 
 
@@ -162,6 +199,7 @@ async def test_run_pipeline_off_book_skips_generation(monkeypatch):
     monkeypatch.setattr(graph, "generate_stage1", fail_if_called)
     monkeypatch.setattr(graph, "generate_stage2", fail_if_called)
     monkeypatch.setattr(graph, "check_style", fail_if_called)
+    monkeypatch.setattr(graph, "verify_answer", fail_if_called)
 
     result = await graph.run_pipeline("Who is the president of France?", grade=5, book_id=uuid.uuid4())
 
@@ -170,11 +208,12 @@ async def test_run_pipeline_off_book_skips_generation(monkeypatch):
     assert result.llm is None
     assert result.stage1_answer is None
     assert result.style is None
+    assert result.verification is None
     assert result.sources  # still cites what was retrieved, even though refused
 
 
 @pytest.mark.asyncio
-async def test_run_pipeline_in_book_generates_and_passes_style_check(monkeypatch):
+async def test_run_pipeline_in_book_generates_and_passes_style_and_verify(monkeypatch):
     from app.core.config import get_settings
 
     get_settings().offbook_score_threshold = 0.35
@@ -198,10 +237,14 @@ async def test_run_pipeline_in_book_generates_and_passes_style_check(monkeypatch
     async def fake_check_style(answer, *, grade, book_id, provider="openai"):
         return make_style_report(passed=True)
 
+    async def fake_verify_answer(answer, context_chunks):
+        return make_verification_report(passed=True, supported_ratio=1.0)
+
     monkeypatch.setattr(graph, "hybrid_search", fake_hybrid_search)
     monkeypatch.setattr(graph, "generate_stage1", fake_generate_stage1)
     monkeypatch.setattr(graph, "generate_stage2", fake_generate_stage2)
     monkeypatch.setattr(graph, "check_style", fake_check_style)
+    monkeypatch.setattr(graph, "verify_answer", fake_verify_answer)
 
     result = await graph.run_pipeline("What did Sumon do?", grade=5, book_id=uuid.uuid4())
 
@@ -217,6 +260,8 @@ async def test_run_pipeline_in_book_generates_and_passes_style_check(monkeypatch
     assert result.search_query == "What did Sumon do?"
     assert result.style.passed is True
     assert result.style_attempts == 1
+    assert result.verification.passed is True
+    assert result.verify_attempts == 1
 
 
 @pytest.mark.asyncio
@@ -247,10 +292,14 @@ async def test_run_pipeline_retries_stage2_once_on_style_failure(monkeypatch):
             return make_style_report(passed=False, failures=["a sentence is 20 words long"])
         return make_style_report(passed=True)
 
+    async def fake_verify_answer(answer, context_chunks):
+        return make_verification_report(passed=True, supported_ratio=1.0)
+
     monkeypatch.setattr(graph, "hybrid_search", fake_hybrid_search)
     monkeypatch.setattr(graph, "generate_stage1", fake_generate_stage1)
     monkeypatch.setattr(graph, "generate_stage2", fake_generate_stage2)
     monkeypatch.setattr(graph, "check_style", fake_check_style)
+    monkeypatch.setattr(graph, "verify_answer", fake_verify_answer)
 
     result = await graph.run_pipeline("What did Sumon do?", grade=5, book_id=uuid.uuid4())
 
@@ -285,19 +334,124 @@ async def test_run_pipeline_still_answered_after_exhausting_style_retries(monkey
         style_calls.append(answer)
         return make_style_report(passed=False, failures=["still too long"])
 
+    async def fake_verify_answer(answer, context_chunks):
+        return make_verification_report(passed=True, supported_ratio=1.0)
+
     monkeypatch.setattr(graph, "hybrid_search", fake_hybrid_search)
     monkeypatch.setattr(graph, "generate_stage1", fake_generate_stage1)
     monkeypatch.setattr(graph, "generate_stage2", fake_generate_stage2)
     monkeypatch.setattr(graph, "check_style", fake_check_style)
+    monkeypatch.setattr(graph, "verify_answer", fake_verify_answer)
 
     result = await graph.run_pipeline("What did Sumon do?", grade=5, book_id=uuid.uuid4())
 
     # 1 initial attempt + style_max_retries(2) retries after it = 3 total
     assert len(style_calls) == 3
     assert result.status == "answered"  # per CLAUDE.md: status is not a new
-    # value on style failure; low_confidence stays reserved for Phase 4
+    # value on style failure; low_confidence stays reserved for a future phase
     assert result.style.passed is False
     assert result.style_attempts == 3
+    # verify still ran on the style-exhausted answer and passed
+    assert result.verification.passed is True
+
+
+# --- verify retry loop -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_verify_retries_stage2_once_then_passes(monkeypatch):
+    from app.core.config import get_settings
+
+    get_settings().offbook_score_threshold = 0.35
+    get_settings().verify_max_retries = 1
+    retrieval = make_retrieval(best_score=0.9)
+
+    stage2_calls = []
+    style_calls = []
+    verify_calls = []
+
+    async def fake_hybrid_search(book_id, query, top_k=None):
+        return retrieval
+
+    def fake_generate_stage1(question, context_chunks, *, provider="openai"):
+        return Stage1Result(answer="Sumon went to school.", llm=fake_llm_result("s1", "v1_stage1"))
+
+    def fake_generate_stage2(question, stage1_answer, *, grade, is_first_turn=True, provider="openai", feedback=None):
+        stage2_calls.append(feedback)
+        text = "Sumon has a pet dragon." if len(stage2_calls) == 1 else "Sumon went to school."
+        return Stage2Result(answer=text, llm=fake_llm_result(text, "v1_stage2"))
+
+    async def fake_check_style(answer, *, grade, book_id, provider="openai"):
+        style_calls.append(answer)
+        return make_style_report(passed=True)
+
+    async def fake_verify_answer(answer, context_chunks):
+        verify_calls.append(answer)
+        if answer == "Sumon has a pet dragon.":
+            return make_verification_report(passed=False, supported_ratio=0.0, unsupported=[answer])
+        return make_verification_report(passed=True, supported_ratio=1.0)
+
+    monkeypatch.setattr(graph, "hybrid_search", fake_hybrid_search)
+    monkeypatch.setattr(graph, "generate_stage1", fake_generate_stage1)
+    monkeypatch.setattr(graph, "generate_stage2", fake_generate_stage2)
+    monkeypatch.setattr(graph, "check_style", fake_check_style)
+    monkeypatch.setattr(graph, "verify_answer", fake_verify_answer)
+
+    result = await graph.run_pipeline("What did Sumon do?", grade=5, book_id=uuid.uuid4())
+
+    assert len(stage2_calls) == 2
+    assert stage2_calls[0] is None  # first attempt: no feedback
+    assert "Sumon has a pet dragon." in stage2_calls[1]  # verify's complaint fed back
+    # the regenerated answer went through style_check again before re-verify
+    assert len(style_calls) == 2
+    assert len(verify_calls) == 2
+    assert result.status == "answered"
+    assert result.answer == "Sumon went to school."
+    assert result.verification.passed is True
+    assert result.verify_attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_verify_exhausts_retries_marks_refused_unverified(monkeypatch):
+    from app.core.config import get_settings
+
+    get_settings().offbook_score_threshold = 0.35
+    get_settings().verify_max_retries = 1
+    retrieval = make_retrieval(best_score=0.9)
+
+    verify_calls = []
+
+    async def fake_hybrid_search(book_id, query, top_k=None):
+        return retrieval
+
+    def fake_generate_stage1(question, context_chunks, *, provider="openai"):
+        return Stage1Result(answer="Sumon went to school.", llm=fake_llm_result("s1", "v1_stage1"))
+
+    def fake_generate_stage2(question, stage1_answer, *, grade, is_first_turn=True, provider="openai", feedback=None):
+        return Stage2Result(answer="Sumon has a pet dragon.", llm=fake_llm_result("s2", "v1_stage2"))
+
+    async def fake_check_style(answer, *, grade, book_id, provider="openai"):
+        return make_style_report(passed=True)
+
+    async def fake_verify_answer(answer, context_chunks):
+        verify_calls.append(answer)
+        return make_verification_report(passed=False, supported_ratio=0.0, unsupported=[answer])
+
+    monkeypatch.setattr(graph, "hybrid_search", fake_hybrid_search)
+    monkeypatch.setattr(graph, "generate_stage1", fake_generate_stage1)
+    monkeypatch.setattr(graph, "generate_stage2", fake_generate_stage2)
+    monkeypatch.setattr(graph, "check_style", fake_check_style)
+    monkeypatch.setattr(graph, "verify_answer", fake_verify_answer)
+
+    result = await graph.run_pipeline("What did Sumon do?", grade=5, book_id=uuid.uuid4())
+
+    # 1 initial verify + verify_max_retries(1) retry after it = 2 total
+    assert len(verify_calls) == 2
+    assert result.status == "refused_unverified"
+    # the actual (ungrounded) generated text is kept, not replaced, for error analysis
+    assert result.answer == "Sumon has a pet dragon."
+    assert result.verification.passed is False
+    assert result.verify_attempts == 2
 
 
 # --- rewrite integration (session_id threads through to search_query) ------
@@ -323,17 +477,20 @@ async def test_run_pipeline_without_session_id_skips_rewrite_entirely(monkeypatc
         stage2_calls.append(is_first_turn)
         return Stage2Result(answer="b", llm=fake_llm_result("b", "v1_stage2"))
 
+    async def fake_check_style(answer, *, grade, book_id, provider="openai"):
+        return make_style_report(passed=True)
+
+    async def fake_verify_answer(answer, context_chunks):
+        return make_verification_report(passed=True, supported_ratio=1.0)
+
     monkeypatch.setattr(graph, "load_history", fail_if_called)
     monkeypatch.setattr(graph, "hybrid_search", fake_hybrid_search)
     monkeypatch.setattr(
         graph, "generate_stage1", lambda q, c, *, provider="openai": Stage1Result(answer="a", llm=fake_llm_result("a", "v1_stage1"))
     )
     monkeypatch.setattr(graph, "generate_stage2", fake_generate_stage2)
-
-    async def fake_check_style(answer, *, grade, book_id, provider="openai"):
-        return make_style_report(passed=True)
-
     monkeypatch.setattr(graph, "check_style", fake_check_style)
+    monkeypatch.setattr(graph, "verify_answer", fake_verify_answer)
 
     result = await graph.run_pipeline("give me more examples", grade=5, book_id=uuid.uuid4(), session_id=None)
 
@@ -369,6 +526,12 @@ async def test_run_pipeline_with_session_id_rewrites_the_query(monkeypatch):
         stage2_calls.append(is_first_turn)
         return Stage2Result(answer="b", llm=fake_llm_result("b", "v1_stage2"))
 
+    async def fake_check_style(answer, *, grade, book_id, provider="openai"):
+        return make_style_report(passed=True)
+
+    async def fake_verify_answer(answer, context_chunks):
+        return make_verification_report(passed=True, supported_ratio=1.0)
+
     monkeypatch.setattr(graph, "load_history", fake_load_history)
     monkeypatch.setattr(graph, "rewrite_question", fake_rewrite_question)
     monkeypatch.setattr(graph, "hybrid_search", fake_hybrid_search)
@@ -376,11 +539,8 @@ async def test_run_pipeline_with_session_id_rewrites_the_query(monkeypatch):
         graph, "generate_stage1", lambda q, c, *, provider="openai": Stage1Result(answer="a", llm=fake_llm_result("a", "v1_stage1"))
     )
     monkeypatch.setattr(graph, "generate_stage2", fake_generate_stage2)
-
-    async def fake_check_style(answer, *, grade, book_id, provider="openai"):
-        return make_style_report(passed=True)
-
     monkeypatch.setattr(graph, "check_style", fake_check_style)
+    monkeypatch.setattr(graph, "verify_answer", fake_verify_answer)
 
     result = await graph.run_pipeline(
         "give me more examples", grade=5, book_id=uuid.uuid4(), session_id=session_id
@@ -411,17 +571,20 @@ async def test_run_pipeline_first_message_of_a_session_is_still_first_turn(monke
         stage2_calls.append(is_first_turn)
         return Stage2Result(answer="b", llm=fake_llm_result("b", "v1_stage2"))
 
+    async def fake_check_style(answer, *, grade, book_id, provider="openai"):
+        return make_style_report(passed=True)
+
+    async def fake_verify_answer(answer, context_chunks):
+        return make_verification_report(passed=True, supported_ratio=1.0)
+
     monkeypatch.setattr(graph, "load_history", fake_load_history)
     monkeypatch.setattr(graph, "hybrid_search", fake_hybrid_search)
     monkeypatch.setattr(
         graph, "generate_stage1", lambda q, c, *, provider="openai": Stage1Result(answer="a", llm=fake_llm_result("a", "v1_stage1"))
     )
     monkeypatch.setattr(graph, "generate_stage2", fake_generate_stage2)
-
-    async def fake_check_style(answer, *, grade, book_id, provider="openai"):
-        return make_style_report(passed=True)
-
     monkeypatch.setattr(graph, "check_style", fake_check_style)
+    monkeypatch.setattr(graph, "verify_answer", fake_verify_answer)
 
     await graph.run_pipeline("What is a noun?", grade=5, book_id=uuid.uuid4(), session_id=session_id)
 

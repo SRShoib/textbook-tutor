@@ -555,3 +555,231 @@ Format:
   steps A/B/C (plus this fix, likely folded into step C's commit since it
   was found while verifying step C) are pending the user's decision on
   whether to keep them separate or squash into one Phase 3 commit.
+
+---
+
+## 2026-09-12 — Phase 4: verify.py (NLI-based hallucination gate)
+
+- built:
+  - `backend/app/pipeline/verify.py` — `verify_answer()` splits the final
+    (stage-2) answer into sentences (reusing `style_check.sentences()`, so
+    the two checks never disagree on sentence boundaries), builds every
+    (chunk, sentence) pair against `context_chunks` (the same post-expansion
+    lesson text stage 1 read), scores them all in one batched
+    `CrossEncoder.predict(..., apply_softmax=True)` call, and keeps the max
+    entailment probability per sentence. `get_nli_model()` is a lazy
+    singleton for `cross-encoder/nli-deberta-v3-base`, same shape as
+    `embeddings.get_embedding_model()`. `VerificationReport` (passed,
+    supported_ratio, per-sentence `SentenceVerification`) is the JSON stored
+    in `messages.verification`.
+  - `graph.py`: new `verify_node` runs after `style_check`, with a
+    conditional edge — supported → answered, partial → regenerate stage 2
+    (feeding back exactly which sentence(s) the book doesn't support) up to
+    `verify_max_retries` times, then `refused_unverified`. The retry rejoins
+    the existing `stage2 -> style_check` loop rather than a separate bypass
+    path, so a verify-triggered rewrite also gets re-style-checked before
+    it's shown. Refactored `stage2_node` to read `state["retry_feedback"]`
+    instead of deriving it from `state["style"]` inline — both
+    `style_check_node` and `verify_node` now write that field every time
+    they run (`None` on a pass), so a retry always carries the *current*
+    loop's failure reason, never a stale one from the other check.
+  - `config.py`: new `verify_max_retries=1` (thresholds
+    `verify_entailment_threshold=0.5`/`verify_supported_ratio=0.8` already
+    existed from earlier setup, unused until now).
+  - `requirements.txt`: `sentence-transformers==6.0.1` pinned explicitly —
+    was already present transitively via `FlagEmbedding`, but `verify.py`
+    now imports it directly.
+  - `api/sessions.py` / `schemas/message.py`: `messages.verification` is no
+    longer hardcoded `None` — populated from `asdict(result.verification)`.
+  - 18 new tests: `test_verify.py` (11, NLI model monkeypatched via
+    `get_nli_model` — never loads the real DeBERTa model) and 7 new/rewritten
+    cases in `test_graph.py` covering `route_after_verify` and full
+    supported / verify-retry-then-pass / verify-retries-exhausted paths
+    end to end. All pre-existing end-to-end `test_graph.py` cases now also
+    monkeypatch `verify_answer` (the graph reaches it unconditionally after
+    style_check). 164 total in the suite, all green.
+
+- decided (four judgment calls, presented to the user before implementing,
+  approved as proposed):
+  - NLI premise is the whole chunk text, not chunk text re-split into
+    sentences — matches CLAUDE.md's "against retrieved chunks" wording and
+    stays simple for a ~135-chunk book. Known limitation, not handled: a
+    chunk over nli-deberta-v3-base's ~512-token window can be silently
+    truncated by the tokenizer; documented in verify.py's module docstring
+    rather than worked around.
+  - Verify's retry goes back through `stage2 -> style_check -> verify`
+    (full loop), not a bare `stage2 -> verify` bypass — a regenerated
+    answer that fixes an unsupported sentence could just as easily come out
+    too long or too hard for the grade, so it should be re-style-checked
+    before it's shown. Costs more possible LLM calls in the worst case
+    (bounded at `(style_max_retries+1) * (verify_max_retries+1)` stage 2
+    calls: 3*2=6 today), traded for not skipping a real quality gate.
+  - `refused_unverified` keeps the actual (ungrounded) generated answer text
+    on the message rather than a canned refusal string — unlike the
+    off-book gate, this fires after generation, and the hallucinated text
+    itself is exactly what Phase 6's error analysis needs to see. Only
+    `status` marks it as refused.
+  - `verify_max_retries` is a new config field (parity with
+    `style_max_retries`) rather than hardcoding "regenerate once" as a
+    constant, so eval configs can vary it without a code change.
+
+- numbers: `sentence-transformers` (6.0.1) and `transformers` (5.17.0) were
+  already installed transitively via `FlagEmbedding`, confirmed by checking
+  the project's `.venv` directly — no new install needed, just an explicit
+  pin. The real `cross-encoder/nli-deberta-v3-base` weights are not yet
+  downloaded/exercised (all 18 new tests monkeypatch the model); first real
+  run against the live book is still pending, same as Phase 3's live
+  verification step.
+
+- not yet done: no live end-to-end run against the real ingested book with
+  a real NLI model download — all verification so far is at the unit/mocked
+  level. Also haven't sanity-checked the assumed
+  `['contradiction', 'entailment', 'neutral']` label order for
+  `cross-encoder/nli-deberta-v3-base` against the actual downloaded model
+  (asserted from the model family's documented convention, not derived from
+  the model config) — worth a one-off manual check the first time this runs
+  for real, before trusting eval numbers built on it.
+
+- next: run this live against the real book/session (same pattern as
+  Phase 3's live check) to (a) confirm the label-order assumption above and
+  (b) see whether the two real hallucination-control questions from the
+  Phase 2 baseline eval (the 4 off-book questions that scored just above
+  0.35 and got "answered" instead of refused) now correctly get caught by
+  verify.py. Then Phase 5: SSE, sessions CRUD, JWT auth, `POST /evaluate`.
+
+---
+
+## 2026-09-12 — Phase 4 live check: verify.py over-rejects genuinely correct answers
+
+- ran (ad hoc, per the user's request — not a committed script): 10
+  answerable questions (q01-q10) + all 5 off-book questions (q26-q30) from
+  `data/question_set/questions.jsonl` through the real `run_pipeline()`
+  against the live book (`97a7267b-...-4be4355e1a4f`, gpt-4o-mini,
+  `cross-encoder/nli-deberta-v3-base` downloaded for real this time, on
+  GPU). Docker Postgres had to be started fresh this session
+  (`docker compose up -d` + `alembic upgrade head`, which was a no-op — same
+  data volume, book still `ready`/135 chunks from Phase 1).
+
+- numbers:
+  - Status breakdown: 1 `answered` (q01), 13 `refused_unverified`, 1
+    `refused_off_book` (q29, the one off-book question that actually cleared
+    the 0.35 gate threshold in the wrong direction, i.e. scored below it).
+  - This includes **9 of the 10 genuinely answerable, in-book questions**
+    (q02-q10) — not just the off-book ones. That's the headline problem:
+    verify.py is rejecting correct answers, not just catching hallucinations.
+  - The other 4 off-book questions (q26-q28, q30) — the exact ones flagged
+    in the 2026-09-12 baseline-eval entry as scoring just above 0.35 and
+    wrongly getting `answered` — now correctly end up `refused_unverified`.
+    That part worked as intended: verify.py is a working second net for
+    off-book leakage even when the retrieval-similarity gate under-fires.
+
+- root cause, confirmed by direct diagnostic (not guessed): first confirmed
+  the label order via `model.config.id2label` on the real downloaded model
+  — `{0: contradiction, 1: entailment, 2: neutral}`, exactly the assumed
+  order, so that part of the plan was right. The actual bug is the
+  "whole chunk as premise" judgment call from the approved Phase 4 plan
+  (flagged then only as a *token-truncation* risk, which turned out to be
+  the wrong risk to worry about). Direct test: feeding the model a short
+  **two-sentence** premise built from chunk u2-s1 ("Our school has a lovely
+  garden. We use a set of gardening tools like spades, rakes, and
+  sickles.") against the hypothesis "They use tools like spades, rakes, and
+  sickles to clean the school garden." — a near word-for-word match to a
+  sentence actually inside the premise — scored
+  `[contradiction=0.002, entailment=0.005, neutral=0.993]`. Compare to the
+  model performing exactly as expected on a classic single-sentence SNLI
+  pair ("A man is eating a pizza." -> "A man is eating food.":
+  `entailment=0.987`). `cross-encoder/nli-deberta-v3-base` is trained on
+  single-sentence-premise/single-sentence-hypothesis pairs (SNLI/MultiNLI);
+  handed a multi-sentence *paragraph* as the premise, it systematically
+  classifies a hypothesis that matches only one sentence within that
+  paragraph as "neutral," not "entailment" — even at ~180 words, nowhere
+  near the ~512-token truncation limit originally worried about. This is a
+  paragraph-vs-sentence out-of-distribution effect, not an edge case; it
+  reproduced on the very first non-trivial multi-sentence chunk tried.
+  q01 only "passed" (0.8 ratio) because 4 of its 5 sentences are near-verbatim
+  restatements of a *short* answer ("Rina likes to read science fiction
+  books" — the whole relevant chunk content in one sentence), which is
+  exactly the in-distribution case the model handles well; its only failing
+  sentence was unrelated teacher patter ("I will repeat that."), correctly
+  flagged.
+
+- not decided yet — flagged to the user, code unchanged pending their call:
+  the fix is almost certainly to make the premise sentence-level (split each
+  context chunk into sentences too, score every hypothesis sentence against
+  every premise sentence, keep the max) rather than whole-chunk, which is
+  much closer to the model's actual training distribution and was
+  considered and set aside in the original plan specifically to avoid the
+  n_sentences x n_premise_sentences blowup — that tradeoff needs revisiting
+  now that "keeps the whole plan simple" has a concrete, large false-refusal
+  cost attached to it. Threshold-tuning alone will not fix this: neutral is
+  eating the entailment mass, so no verify_entailment_threshold value fixes
+  a systematically-misclassified label.
+
+- next: get the user's decision on the premise-granularity fix above before
+  touching verify.py again. Whatever is decided, re-run this same
+  10-answerable/5-off-book check afterward as the regression check.
+
+---
+
+## 2026-09-12 — Phase 4 fix: sentence-split NLI premises
+
+- decided: user chose the sentence-split-premise fix from the options
+  presented in the entry above (over swapping the NLI model, doing nothing,
+  or lowering verify_supported_ratio — the last was already known not to
+  work, since neutral eating the entailment mass isn't a threshold problem).
+
+- built:
+  - `verify.py`: new `_premise_sentences(chunks)` — splits each chunk's body
+    (header line dropped, same as `style_check.book_vocabulary()`) into
+    sentences via the same `style_check.sentences()` splitter used for the
+    answer side, returning `(lesson_id, sentence)` pairs. `verify_sentences()`
+    now scores every answer sentence against every *premise sentence* across
+    all chunks (not against whole chunks), still one batched `predict()`
+    call. `best_lesson_id` now comes from whichever premise sentence won,
+    not whichever chunk won — same field, finer-grained source.
+  - Module docstring rewritten to record the live finding as the reason for
+    the change (concrete scores: the two-sentence-premise test from the
+    diagnostic above, and the SNLI single-sentence pair it was compared
+    against) rather than just asserting the new design.
+  - 2 new tests in `test_verify.py`: `_premise_sentences` header-stripping +
+    splitting, and the exact q02 shape (a fact buried in a multi-sentence
+    chunk must still score as entailed) as a regression test for this exact
+    bug. All 6 pre-existing `test_verify.py` tests passed unchanged with no
+    edits — their fixture chunks all happened to already be single-sentence,
+    so they exercised the new code path trivially; the 2 new tests are what
+    actually cover multi-sentence chunks. 148 total in the suite, all green
+    (was 146; +2, not +18, since this is an edit to Phase 4's existing
+    module, not new Phase 5 work).
+
+- numbers (same 15-question re-run, same book/session pattern, LLM answers
+  served from cache so no new OpenAI spend — only the NLI scoring re-ran):
+  status went from 1 `answered` / 13 `refused_unverified` / 1
+  `refused_off_book` to 4 `answered` (q01, q02, q04, q26) / 9
+  `refused_unverified` / 1 `refused_off_book`, i.e. still not "everything
+  correct is answered," but a real improvement, not a fluke: q02
+  specifically (the diagnostic case above) went from
+  `entailment=0.002/supported=False` to `entailment=0.66/supported=True` on
+  its exact factual sentence, sourced correctly to chunk u2-s1.
+
+- new finding surfaced by this same re-run, NOT introduced by today's fix
+  (carried over from the Phase 2 baseline-eval entry's "answered honestly
+  that the book doesn't cover it" observation, now visible again from a
+  different angle): q26 ("What is the capital of Japan?", off-book) now also
+  shows `status=answered`. Its stage-1/stage-2 answer is actually honest —
+  "The passages do not contain any information about the capital of Japan"
+  — so no hallucinated fact reaches the student, but the self-referential
+  refusal sentence itself scored `entailment=0.977` and `0.961` against two
+  unrelated chunks (u6-s2, u7-s2), which is a second, narrower NLI quirk:
+  a sentence *about the book's own coverage* ("the passages do not contain
+  X") apparently reads as generically entailable from almost any chunk,
+  independent of X. This is a different failure mode from the
+  whole-chunk-premise bug fixed above (that one under-scored true positives;
+  this one over-scores a specific sentence *shape*) and is not fixed here —
+  flagged for the user to decide on, same as the premise-granularity call
+  was, rather than acted on unilaterally.
+
+- decided: user chose to leave the q26-shaped finding for Phase 6's error
+  analysis at scale rather than act on it now — verify.py is unchanged for
+  this. Revisit then with real eval-set volume behind it, not one question.
+
+- next: Phase 5 — SSE, sessions CRUD, JWT auth, `POST /evaluate`.
