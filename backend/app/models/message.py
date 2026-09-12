@@ -31,7 +31,9 @@ class Message(Base):
     status: Mapped[MessageStatus | None] = mapped_column(
         str_enum(MessageStatus, "message_status"), nullable=True
     )
-    sources: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # A list of citation objects (one per retrieved chunk), not a single
+    # dict — see pipeline/graph.py's build_sources().
+    sources: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     verification: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     readability: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     config_version: Mapped[str | None] = mapped_column(String, nullable=True)

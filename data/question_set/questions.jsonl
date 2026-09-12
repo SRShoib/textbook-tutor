@@ -1,0 +1,30 @@
+{"id": "q01", "question": "What kind of books does Rina like to read?", "lesson_id": "u1-s2", "reference_answer": "Science fiction.", "type": "factual", "split": "dev"}
+{"id": "q02", "question": "What tools do the students use to clean the school garden?", "lesson_id": "u2-s1", "reference_answer": "Spades, rakes, and sickles.", "type": "factual", "split": "dev"}
+{"id": "q03", "question": "Why does Rayan ask Erhan to be quiet?", "lesson_id": "u3-s1", "reference_answer": "Because Rayan's little sister is sleeping in the next room.", "type": "factual", "split": "dev"}
+{"id": "q04", "question": "What does an imperative sentence do, and how does it usually start?", "lesson_id": "u3-s4", "reference_answer": "It gives a command, instruction, or expresses a request, and it usually starts with a verb.", "type": "grammar", "split": "dev"}
+{"id": "q05", "question": "Who is said to have established the 'ganj' that Kishoreganj may be named after?", "lesson_id": "u4-s3", "reference_answer": "A landlord named Brojakishore Pramanik, also known as Nandakishore Pramanik.", "type": "factual", "split": "test"}
+{"id": "q06", "question": "How many upazilas does Kishoreganj district have?", "lesson_id": "u4-s5", "reference_answer": "13 upazilas.", "type": "factual", "split": "dev"}
+{"id": "q07", "question": "How many candidates were competing in the student council election, and for how many positions?", "lesson_id": "u5-s1", "reference_answer": "Seventeen candidates competing for seven positions.", "type": "factual", "split": "dev"}
+{"id": "q08", "question": "What is the capital city of Indonesia, according to the email?", "lesson_id": "u6-s2", "reference_answer": "Jakarta.", "type": "factual", "split": "dev"}
+{"id": "q09", "question": "In which three districts is the Sundarbans located?", "lesson_id": "u7-s2", "reference_answer": "Khulna, Satkhira and Bagerhat.", "type": "factual", "split": "dev"}
+{"id": "q10", "question": "In what year was the Sundarbans declared a World Heritage Site by UNESCO?", "lesson_id": "u7-s2", "reference_answer": "1997.", "type": "factual", "split": "test"}
+{"id": "q11", "question": "Where did Farhana's class go on their field trip?", "lesson_id": "u8-s2", "reference_answer": "The Liberation War Museum at Agargaon, Dhaka.", "type": "factual", "split": "dev"}
+{"id": "q12", "question": "What time does the boys' 100-meter race start, according to the sports day announcement?", "lesson_id": "u9-s2", "reference_answer": "Quarter to ten (9:45 a.m.).", "type": "factual", "split": "dev"}
+{"id": "q13", "question": "Which platform is the Rangpur Express boarding from?", "lesson_id": "u9-s4", "reference_answer": "Platform Number 2.", "type": "factual", "split": "dev"}
+{"id": "q14", "question": "Who wrote the poem 'The Swing'?", "lesson_id": "u10-s1", "reference_answer": "Robert Louis Stevenson.", "type": "factual", "split": "dev"}
+{"id": "q15", "question": "What does Salma ask Mamun for first in their conversation?", "lesson_id": "u11-s2", "reference_answer": "An extra pencil.", "type": "factual", "split": "test"}
+{"id": "q16", "question": "What does Mong have for tiffin?", "lesson_id": "u12-s2", "reference_answer": "Bread and banana.", "type": "factual", "split": "dev"}
+{"id": "q17", "question": "What did Naima and Masuk's mother take away from them?", "lesson_id": "u13-s1", "reference_answer": "The tablet.", "type": "factual", "split": "dev"}
+{"id": "q18", "question": "In the vocabulary exercise, what does 'ashamed' mean?", "lesson_id": "u13-s2", "reference_answer": "To feel bad or embarrassed about something.", "type": "vocabulary", "split": "dev"}
+{"id": "q19", "question": "What game did Lipi win a competition in at school?", "lesson_id": "u14-s2", "reference_answer": "Chess.", "type": "factual", "split": "dev"}
+{"id": "q20", "question": "In the poem 'The Secret Song', who saw the petals drop from the rose?", "lesson_id": "u15-s2", "reference_answer": "The spider.", "type": "factual", "split": "test"}
+{"id": "q21", "question": "What did the tree offer the boy when he asked her for money?", "lesson_id": "u16-s2", "reference_answer": "Apples, which he could sell in the city.", "type": "factual", "split": "dev"}
+{"id": "q22", "question": "According to the newspaper article, what are fossil fuels?", "lesson_id": "u17-s1", "reference_answer": "Things like coal, oil and natural gas.", "type": "factual", "split": "dev"}
+{"id": "q23", "question": "What did Adiba's grandmother make for her birthday?", "lesson_id": "u18-s2", "reference_answer": "A Nakshi Kantha, a traditional handmade quilt.", "type": "factual", "split": "dev"}
+{"id": "q24", "question": "What did the wind and the sun argue about?", "lesson_id": "u19-s1", "reference_answer": "Who was stronger, or more powerful.", "type": "factual", "split": "dev"}
+{"id": "q25", "question": "What was the crow looking for in the story?", "lesson_id": "u20-s2", "reference_answer": "Water.", "type": "factual", "split": "test"}
+{"id": "q26", "question": "What is the capital of Japan?", "lesson_id": null, "reference_answer": null, "type": "off_book", "split": "dev"}
+{"id": "q27", "question": "Who wrote the novel 'Harry Potter and the Philosopher's Stone'?", "lesson_id": null, "reference_answer": null, "type": "off_book", "split": "dev"}
+{"id": "q28", "question": "What is the boiling point of water in degrees Celsius at sea level?", "lesson_id": null, "reference_answer": null, "type": "off_book", "split": "dev"}
+{"id": "q29", "question": "Who was the first person to walk on the Moon?", "lesson_id": null, "reference_answer": null, "type": "off_book", "split": "dev"}
+{"id": "q30", "question": "What is the largest planet in our solar system?", "lesson_id": null, "reference_answer": null, "type": "off_book", "split": "test"}

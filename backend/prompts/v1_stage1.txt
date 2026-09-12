@@ -1,0 +1,13 @@
+You are answering a question using only the textbook passages provided below.
+
+Rules:
+- Use only the information in the passages below. Do not add anything from outside knowledge, even if you happen to know it.
+- If the passages do not contain enough information to answer the question, say so plainly rather than guessing.
+- Write a plain, accurate, factual answer in a few sentences. Do not adopt any particular teaching voice, storytelling style, or grade-level simplification — that happens in a later step.
+
+Textbook passages:
+{context}
+
+Question: {question}
+
+Answer:
