@@ -211,3 +211,101 @@ Format:
 - next: fill in .env and run the three checks above; then Phase 3 — style
   guide loaded, stage 2 (grade voice), style_check.py, rewrite.py, session
   history.
+
+---
+
+## 2026-09-12 — 30-question baseline eval + Phase 0 style guide completed
+
+- built:
+  - data/question_set/questions.jsonl rewritten: 30 questions (25 in-book
+    across all 20 units, 5 off-book), schema changed to
+    id/question/lesson_id/reference_answer/type/split per user request;
+    eval/runner.py updated to read `lesson_id` (was `expected_lesson_id`) and
+    pass `reference_answer`/`type` through into the output JSONL
+  - Ran `eval/runner.py --config baseline` for real against the live book and
+    a real OpenAI key (gpt-4o-mini): 87 LLM calls, 0 cache hits (first run),
+    94.6k prompt + 5.8k completion tokens, 77.3s wall time
+  - Filled in Phase 0's style guide for real: read all 12 Ghore Boshe Shikhi
+    transcripts and the Teacher's Guide PDF (pp. 6-8, 13-14, 144 — rendered to
+    PNG and read visually, since the PDF has no text layer, likely
+    Illustrator-outlined text, same broken-font family of problem as Phase
+    1's textbook PDF but worse: zero extractable text, zero embedded raster
+    images). Filled style_guide.md §1, §3 (all 5 structural-rule subsections),
+    §4, §5, §6 (grade 5 row), §8; replaced all 5 synthetic rows in
+    fewshot_examples.jsonl with real ones.
+
+- decided:
+  - Held out 4 of 12 transcripts (V-1 `JV5LTEnfpIc`, V-5 `Ip7CyD1jdT8`, V-11
+    `l476VH3iBNo`, V-12 `bBESclfJN8o`), untouched, as the human reference for
+    Phase 6 eval, per CLAUDE.md. Caught and fixed a real mistake here during
+    drafting: my first pass at style_guide.md cited several of these
+    held-out transcripts directly as evidence for the rules, which would
+    have quietly invalidated the whole point of holding them out (comparing
+    the bot against something its own rules weren't shaped by). Re-sourced
+    every affected citation from the remaining 8 transcripts before writing
+    the final version, and swapped one holdout pick (V-4, the only phonics
+    lesson in the batch and needed as evidence) for V-12 (a third recording
+    of the same "Shoykot's family" lesson already covered by two other
+    non-held-out transcripts, so losing it costs nothing).
+  - Teacher interviews, which the style_guide.md skeleton originally
+    targeted (3 interviews), are dropped entirely — CLAUDE.md's Phase 0
+    section restricts sources to exactly three types and explicitly excludes
+    interviews. None were conducted; the requirement itself was stale, not
+    unfinished.
+  - Removed the "0.0% Bangla insertion rate" measurement from being treated
+    as a finding — it's a measurement artifact. Whisper transliterated all
+    Bangla speech into Latin letters (romanized), so a Bangla-Unicode-script
+    detector reads ~0% even though Bangla is extensively present. Replaced
+    with a qualitative pattern instead (§3.4): Bangla usage scales with
+    content abstractness — light (question/instruction restatement only) in
+    narrative lessons, heavy (near sentence-for-sentence paraphrase) in the
+    one phonics lesson sampled.
+
+- numbers:
+  - Baseline eval (30 questions, gpt-4o-mini, threshold 0.35): 29 answered /
+    1 refused_off_book. Retrieval hit rate 0.96 (24/25 labelled questions).
+    RAGAS faithfulness 0.90 (n=29, but see caveat below).
+  - Real finding, not yet acted on: only 1 of 5 off-book questions correctly
+    triggered refused_off_book — the other 4 scored just above the 0.35
+    off-book threshold on dense similarity to *some* chunk despite being
+    pure trivia. Stage 1 itself behaved correctly in all 4 (answered
+    honestly that the book doesn't cover it, no hallucination), but the
+    message `status` still reads "answered", which is the wrong label for
+    what happened. This is exactly the gap Phase 4's verifier should close;
+    until then `status=answered` is not proof the book supported the answer.
+  - Related caveat: the 0.90 faithfulness average is partly inflated by
+    those same 4 near-miss off-book rows — a response that mostly declines
+    to answer makes few checkable claims, so it scores as trivially
+    faithful. Don't read 0.90 as "90% of answers are good"; it conflates
+    genuine faithfulness with evasive non-answers.
+  - Style guide: 8 of 12 transcripts (15,027 words total across all 12)
+    supplied every citation in the final style_guide.md; 4 held out clean.
+
+- follow-up same day: checked the actual PROMPTS.md Phase 0 script against
+  what was done and found two real gaps — the Teacher's Guide instruction
+  says "for 5 lessons," and only 1.5 had been read (Unit 1 in full, plus one
+  page of Unit 14). Closed this by reading the Introduction + Review of
+  prior knowledge sections of 4 more lessons across the book (Units 5, 8, 12,
+  17). Result: the fixed greeting is now confirmed identical across 6 units
+  spanning nearly the whole book, not 2 — strong evidence, not a
+  coincidence. Also found a refinement worth keeping: "Review of the prior
+  knowledge" is usually topic-*anticipation* for the lesson about to start,
+  not a recap of the previous one (only Units 1 and 14 tie it to earlier
+  content). And a stronger, session-script-level citation for the
+  English-usage rule turned up in Unit 12: "[Encourage Ss to respond in
+  English.]" All folded into style_guide.md as v1.1.
+  The second gap — PROMPTS.md has the user picking the 5 few-shot examples
+  from candidates and hand-fixing their transcription errors before they go
+  in — was named but not closed; that checkpoint is deliberately the user's,
+  not mine, and is still open.
+
+- git: repo was git-init'd and Phase 1 + Phase 2 are now real commits
+  (`755f03f`, `6d95601` on a `phase-2-pipeline` branch off `main`) — gave the
+  user branch/push/merge commands rather than running git myself, per
+  CLAUDE.md.
+
+- next: merge phase-2-pipeline into main (user's call on timing); use the
+  eval findings above to motivate Phase 4's verifier scope; then Phase 3
+  proper — stage 2 (grade voice) built from this style guide, style_check.py,
+  rewrite.py, session history. The off-book threshold (0.35) is still
+  untuned — Phase 6 tunes it on the dev split, not before.
