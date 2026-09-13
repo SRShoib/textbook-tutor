@@ -13,13 +13,13 @@
 import { useEffect, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiFetch, ApiError } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import type { SessionRead } from "@/lib/types";
 
-export function Sidebar() {
+export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
   const params = useParams<{ sessionId?: string }>();
@@ -51,10 +51,23 @@ export function Sidebar() {
         if (!cancelled) setLoading(false);
       }
     })();
+    // Also closes the mobile drawer on every navigation -- onClose is
+    // useCallback-stabilized by the layout, so this doesn't re-fire on
+    // unrelated parent re-renders.
+    onClose();
     return () => {
       cancelled = true;
     };
-  }, [pathname, reloadToken]);
+  }, [pathname, reloadToken, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
 
   function startEditing(session: SessionRead) {
     setEditingId(session.id);
@@ -101,16 +114,29 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-      <div className="p-3">
+    <aside
+      className={`fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-transform duration-200 md:relative md:translate-x-0 md:transition-none ${
+        open ? "translate-x-0" : "-translate-x-full"
+      }`}
+    >
+      <div className="flex items-center gap-2 p-3">
         <Button
           render={<Link href="/upload" />}
           nativeButton={false}
           variant="secondary"
-          className="w-full justify-start gap-2"
+          className="w-full flex-1 justify-start gap-2"
         >
           <Plus className="size-4" />
           New chat
+        </Button>
+        {/* The hamburger button that opens this drawer sits in the layout's
+            header bar above -- once open, this fixed+z-40 aside visually
+            covers it (fixed elements stack above normal-flow content
+            regardless of DOM order), so there's otherwise no visible way to
+            close the drawer without already knowing to tap the backdrop or
+            press Escape. */}
+        <Button variant="ghost" size="icon-sm" aria-label="Close menu" onClick={onClose} className="md:hidden">
+          <X className="size-4" />
         </Button>
       </div>
 
@@ -155,7 +181,7 @@ export function Sidebar() {
                       </Link>
                     )}
                     {editingId !== session.id && (
-                      <div className="hidden shrink-0 gap-0.5 group-hover:flex">
+                      <div className="hidden shrink-0 gap-0.5 group-hover:flex group-focus-within:flex">
                         <Button
                           size="icon-sm"
                           variant="ghost"

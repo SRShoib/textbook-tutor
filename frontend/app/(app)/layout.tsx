@@ -8,14 +8,18 @@
  * in the edge runtime.
  */
 
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Menu } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
 import { Sidebar } from "@/components/sidebar";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { status } = useAuth();
   const router = useRouter();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
   useEffect(() => {
     if (status === "anon") router.replace("/login");
@@ -30,9 +34,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex flex-1">
-      <Sidebar />
-      <div className="flex flex-1 flex-col">{children}</div>
+    <div className="flex flex-1 flex-col">
+      <div className="flex items-center border-b p-2 md:hidden">
+        <Button variant="ghost" size="icon-sm" aria-label="Open menu" onClick={() => setSidebarOpen(true)}>
+          <Menu className="size-5" />
+        </Button>
+      </div>
+      <div className="flex min-h-0 flex-1">
+        {sidebarOpen && (
+          <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={closeSidebar} aria-hidden="true" />
+        )}
+        <Sidebar open={sidebarOpen} onClose={closeSidebar} />
+        <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+      </div>
     </div>
   );
 }

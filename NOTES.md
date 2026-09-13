@@ -1498,3 +1498,68 @@ exists globally, keyboard nav, responsive/mobile sidebar); `POST /evaluate` as a
 **Next:** Phase 7 module 7 — polish pass: reduced-motion audit, keyboard nav, Bangla rendering
 check (still only spot-checked in module 1), responsive check including the sidebar's mobile
 collapse deferred there.
+
+---
+
+## 2026-09-13 — Phase 7, module 7: polish pass (closes out Phase 7)
+
+Frontend only, no backend changes, 260 backend tests unaffected. Mostly verification rather than
+new code, per the plan -- one real feature (sidebar mobile collapse) and one real bug fix.
+
+**Built:**
+- `components/sidebar.tsx`: takes `open`/`onClose` props; the `<aside>` is `fixed ...
+  -translate-x-full` off-screen by default, `md:relative md:translate-x-0 md:transition-none` at
+  the `md:` breakpoint (unchanged desktop behavior). Closes itself on every route change (the
+  existing pathname-watching effect gained `onClose()`) and on Escape while open.
+- **The real bug, found re-reading the file before planning, not assumed:** each row's
+  rename/delete buttons were `hidden ... group-hover:flex` -- `display:none` removes an element
+  from the tab order entirely, so a keyboard user could never reach or even see them. Fixed with
+  `group-focus-within:flex` alongside the existing hover variant.
+- `app/(app)/layout.tsx`: one `sidebarOpen` boolean, a `md:hidden` bar with a hamburger button
+  above the sidebar+content row, a click-to-close backdrop.
+
+**A second real bug, found only by testing live, not by reading the code:** once the mobile
+drawer was open, the hamburger button that opens it became visually covered by the sidebar itself
+-- a `fixed z-40` element stacks above normal-flow content regardless of DOM order, so the
+`<aside>` painted directly over where the hamburger sits once slid open. There was then no
+*visible* way to close the drawer except already knowing to tap the backdrop or press Escape.
+Fixed by adding an explicit `X` close button inside the sidebar's own header, `md:hidden`. Caught
+this specifically because a Playwright test tried to click the hamburger a second time and got a
+"element intercepts pointer events" error instead of a silent false-pass -- reading the error
+mattered more than the assertion here.
+
+**Verified live, each with a real fix-forward when the first attempt was wrong (both times because
+the *test* was wrong, worth recording so the pattern is recognizable next time):**
+- **Keyboard nav**: first attempt called `.focus()` directly on the (still-hidden,
+  `display:none`) rename button and got `visible: false` -- which looked like the fix hadn't
+  worked, but a hidden element genuinely cannot receive focus, so this was proving nothing either
+  way. Corrected to focus the row's *link* first (the actual focusable element inside the same
+  `group`), confirmed `group-focus-within` then reveals the buttons, confirmed a further Tab
+  press lands on the rename button (`document.activeElement`'s `aria-label` checked directly), and
+  confirmed Enter opens the inline rename input. All real, all passing.
+- **Responsive**: at a 390px viewport, confirmed `document.body.scrollWidth === 390` (no
+  horizontal overflow), the drawer's bounding box moves between fully off-screen and `x:0` on
+  open/close/Escape/backdrop-click, and reverts to always-visible with the hamburger hidden at a
+  desktop viewport -- one continuous script, not separate assumptions.
+- **Reduced motion**: `page.emulateMedia({reducedMotion:"reduce"})`, confirmed the sidebar's
+  `getComputedStyle(...).transitionDuration` reads `1e-05s` (matches `globals.css`'s `0.01ms`
+  override exactly), then ran a full real chat turn (streaming, evidence panel expand) under the
+  same emulation with zero console errors.
+- **Bangla, in the real chat bubble, not an injected probe like module 1's check:** the first
+  narrative question tried ("What kind of books does Rina like to read?") came back English-only
+  -- a reminder that the Bangla restatement is a real LLM stylistic choice, not guaranteed per
+  question. A second, more clearly narrative question ("Why does Rayan ask Erhan to be quiet?")
+  produced a real Bangla response, which rendered with correct conjuncts and no tofu boxes inside
+  the actual `AssistantMessage` bubble. **A real finding, not a frontend bug and not fixed here:**
+  the entire answer came back in Bangla this time, not just a question restatement with an
+  English answer body as style_guide.md's rule describes -- a stage 2 prompt-adherence question
+  for whoever next touches `generate.py`, out of scope for this module.
+
+**Not done, out of scope:** full WCAG-level audit (focus trapping inside the mobile drawer, ARIA
+live regions for streaming text) -- the one concrete bug found (hidden buttons unreachable by
+keyboard) is fixed; deeper accessibility work was never asked for and isn't free.
+
+**This closes Phase 7.** All seven modules built, committed, and verified live: foundation/auth,
+sessions CRUD + titles, upload + class picker, sidebar, backend SSE, the real chat screen, and this
+polish pass. Remaining project work is Phase 5's leftover `POST /evaluate` route (not blocking) and
+Phase 8, thesis writing.
