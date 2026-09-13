@@ -69,7 +69,15 @@ def _mock_pipeline(monkeypatch):
     async def fake_run_pipeline(question, grade, book_id, **kwargs):
         return _fake_pipeline_result()
 
+    async def fake_run_pipeline_stream(question, grade, book_id, **kwargs):
+        from app.pipeline.graph import StreamEvent
+
+        yield StreamEvent("retrieving", {"search_query": question})
+        yield StreamEvent("sources", {"sources": [{"lesson_id": "u1-s1"}]})
+        yield StreamEvent("result", {"result": _fake_pipeline_result()})
+
     monkeypatch.setattr("app.api.sessions.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr("app.api.sessions.run_pipeline_stream", fake_run_pipeline_stream)
 
 
 @pytest.fixture
@@ -240,3 +248,124 @@ async def test_updated_at_bumps_on_each_message(client, db_session, _mock_title)
     await client.post(f"/api/v1/sessions/{session_id}/messages", json={"content": "Give an example."}, headers=_auth(token))
     after_second = await client.get(f"/api/v1/sessions/{session_id}", headers=_auth(token))
     assert after_second.json()["updated_at"] > after_first.json()["updated_at"]
+
+
+def _parse_sse(raw: str) -> list[tuple[str, dict]]:
+    """Turns raw `event: k\\ndata: {...}\\n\\n` text into [(kind, data), ...]."""
+    import json
+
+    events = []
+    for block in raw.strip().split("\n\n"):
+        if not block.strip():
+            continue
+        lines = block.strip().split("\n")
+        kind = lines[0].removeprefix("event: ")
+        data = json.loads(lines[1].removeprefix("data: "))
+        events.append((kind, data))
+    return events
+
+
+@pytest.mark.asyncio
+async def test_stream_endpoint_requires_ownership_and_ready_book(client, db_session):
+    token_a = await _register(client, "stream-a@example.com")
+    token_b = await _register(client, "stream-b@example.com")
+    ready_book = await _make_book(db_session, file_hash="hash-stream-ready")
+    processing_book = Book(
+        title="Still Processing", grade=5, status=BookStatus.PROCESSING, chunk_count=0, file_hash="hash-stream-proc"
+    )
+    db_session.add(processing_book)
+    await db_session.commit()
+
+    created = await client.post("/api/v1/sessions", json={"book_id": str(ready_book.id)}, headers=_auth(token_a))
+    session_id = created.json()["id"]
+
+    forbidden = await client.post(
+        f"/api/v1/sessions/{session_id}/messages/stream", json={"content": "hi"}, headers=_auth(token_b)
+    )
+    assert forbidden.status_code == 404
+
+    not_ready_session = await client.post(
+        "/api/v1/sessions", json={"book_id": str(processing_book.id)}, headers=_auth(token_a)
+    )
+    not_ready_id = not_ready_session.json()["id"]
+    not_ready_resp = await client.post(
+        f"/api/v1/sessions/{not_ready_id}/messages/stream", json={"content": "hi"}, headers=_auth(token_a)
+    )
+    assert not_ready_resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_stream_endpoint_emits_events_in_order_and_persists_the_message(client, db_session, _mock_title):
+    token = await _register(client, "stream-order@example.com")
+    book = await _make_book(db_session, file_hash="hash-stream-order")
+
+    created = await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token))
+    session_id = created.json()["id"]
+
+    async with client.stream(
+        "POST",
+        f"/api/v1/sessions/{session_id}/messages/stream",
+        json={"content": "What is a noun?"},
+        headers=_auth(token),
+    ) as response:
+        assert response.status_code == 200
+        raw = ""
+        async for chunk in response.aiter_text():
+            raw += chunk
+
+    events = _parse_sse(raw)
+    kinds = [kind for kind, _ in events]
+
+    # retrieving -> sources -> N token events (one per word) -> done.
+    # No "verification" event here: _fake_pipeline_result() sets verification=None,
+    # same as an off-book/config-B-shaped result would.
+    assert kinds[0] == "retrieving"
+    assert kinds[1] == "sources"
+    assert kinds[-1] == "done"
+    assert all(k == "token" for k in kinds[2:-1])
+
+    token_text = "".join(data["text"] for kind, data in events if kind == "token")
+    assert token_text.strip() == "A noun is a naming word."
+
+    done_data = next(data for kind, data in events if kind == "done")
+    assert done_data["content"] == "A noun is a naming word."
+    assert done_data["status"] == "answered"
+
+    # The answer must already be durably committed -- not just streamed.
+    history = await client.get(f"/api/v1/sessions/{session_id}/messages", headers=_auth(token))
+    assistant_rows = [m for m in history.json() if m["role"] == "assistant"]
+    assert len(assistant_rows) == 1
+    assert assistant_rows[0]["content"] == "A noun is a naming word."
+
+
+@pytest.mark.asyncio
+async def test_stream_endpoint_emits_error_event_on_pipeline_failure(client, db_session, monkeypatch):
+    token = await _register(client, "stream-error@example.com")
+    book = await _make_book(db_session, file_hash="hash-stream-error")
+    created = await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token))
+    session_id = created.json()["id"]
+
+    async def failing_run_pipeline_stream(question, grade, book_id, **kwargs):
+        raise RuntimeError("simulated pipeline crash")
+        yield  # pragma: no cover -- makes this an async generator function
+
+    monkeypatch.setattr("app.api.sessions.run_pipeline_stream", failing_run_pipeline_stream)
+
+    async with client.stream(
+        "POST",
+        f"/api/v1/sessions/{session_id}/messages/stream",
+        json={"content": "What is a noun?"},
+        headers=_auth(token),
+    ) as response:
+        raw = ""
+        async for chunk in response.aiter_text():
+            raw += chunk
+
+    events = _parse_sse(raw)
+    assert [kind for kind, _ in events] == ["error"]
+    assert events[0][1]["code"] == "STREAM_FAILED"
+    assert "simulated pipeline crash" in events[0][1]["message"]
+
+    # No assistant row -- the crash happened before any message was built.
+    history = await client.get(f"/api/v1/sessions/{session_id}/messages", headers=_auth(token))
+    assert not [m for m in history.json() if m["role"] == "assistant"]

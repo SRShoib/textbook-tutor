@@ -793,4 +793,121 @@ async def test_run_pipeline_config_c_skips_verify(monkeypatch):
     assert result.answer == "Dear students, Sumon went to school."
     assert result.style.passed is True
     assert result.verification is None
-    assert result.verify_attempts == 0
+
+
+# --- run_pipeline_stream (Phase 7 module 5) ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_answered_run_emits_retrieving_sources_then_result(monkeypatch):
+    from app.core.config import get_settings
+
+    get_settings().offbook_score_threshold = 0.35
+    retrieval = make_retrieval(best_score=0.9)
+
+    async def fake_hybrid_search(book_id, query, top_k=None):
+        return retrieval
+
+    def fake_generate_stage1(question, context_chunks, *, provider="openai"):
+        return Stage1Result(answer="Sumon went to school.", llm=fake_llm_result("s1", "v1_stage1"))
+
+    def fake_generate_stage2(
+        question, stage1_answer, *, grade, is_first_turn=True, provider="openai", feedback=None, source_citation=None
+    ):
+        return Stage2Result(
+            answer="Dear students, Sumon went to school.",
+            llm=fake_llm_result("Dear students, Sumon went to school.", "v1_stage2"),
+        )
+
+    async def fake_check_style(answer, *, grade, book_id, provider="openai"):
+        return make_style_report(passed=True)
+
+    async def fake_verify_answer(answer, context_chunks):
+        return make_verification_report(passed=True)
+
+    monkeypatch.setattr(graph, "hybrid_search", fake_hybrid_search)
+    monkeypatch.setattr(graph, "generate_stage1", fake_generate_stage1)
+    monkeypatch.setattr(graph, "generate_stage2", fake_generate_stage2)
+    monkeypatch.setattr(graph, "check_style", fake_check_style)
+    monkeypatch.setattr(graph, "verify_answer", fake_verify_answer)
+
+    events = [event async for event in graph.run_pipeline_stream("What did Sumon do?", grade=5, book_id=uuid.uuid4())]
+
+    assert [e.kind for e in events] == ["retrieving", "sources", "result"]
+    assert events[0].data["search_query"] == "What did Sumon do?"
+    assert events[1].data["sources"][0]["lesson_id"] == "u1-s1"
+    result = events[2].data["result"]
+    assert result.status == "answered"
+    assert result.answer == "Dear students, Sumon went to school."
+    assert result.verification.passed is True
+
+
+@pytest.mark.asyncio
+async def test_stream_off_book_still_emits_sources_before_the_refusal_result(monkeypatch):
+    from app.core.config import get_settings
+
+    get_settings().offbook_score_threshold = 0.35
+    retrieval = make_retrieval(best_score=0.1)
+
+    async def fake_hybrid_search(book_id, query, top_k=None):
+        return retrieval
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("generation must not be called on the off-book branch")
+
+    monkeypatch.setattr(graph, "hybrid_search", fake_hybrid_search)
+    monkeypatch.setattr(graph, "generate_stage1", fail_if_called)
+    monkeypatch.setattr(graph, "generate_stage2", fail_if_called)
+    monkeypatch.setattr(graph, "check_style", fail_if_called)
+    monkeypatch.setattr(graph, "verify_answer", fail_if_called)
+
+    events = [
+        event async for event in graph.run_pipeline_stream("Who is the president of France?", grade=5, book_id=uuid.uuid4())
+    ]
+
+    assert [e.kind for e in events] == ["retrieving", "sources", "result"]
+    result = events[2].data["result"]
+    assert result.status == "refused_off_book"
+    assert result.answer == graph.OFF_BOOK_REFUSAL
+
+
+@pytest.mark.asyncio
+async def test_stream_verify_exhausted_still_ends_in_one_result_event(monkeypatch):
+    from app.core.config import get_settings
+
+    get_settings().offbook_score_threshold = 0.35
+    get_settings().verify_max_retries = 0
+    retrieval = make_retrieval(best_score=0.9)
+
+    async def fake_hybrid_search(book_id, query, top_k=None):
+        return retrieval
+
+    def fake_generate_stage1(question, context_chunks, *, provider="openai"):
+        return Stage1Result(answer="Sumon went to school.", llm=fake_llm_result("s1", "v1_stage1"))
+
+    def fake_generate_stage2(
+        question, stage1_answer, *, grade, is_first_turn=True, provider="openai", feedback=None, source_citation=None
+    ):
+        return Stage2Result(answer="a hallucinated answer", llm=fake_llm_result("a hallucinated answer", "v1_stage2"))
+
+    async def fake_check_style(answer, *, grade, book_id, provider="openai"):
+        return make_style_report(passed=True)
+
+    async def fake_verify_answer(answer, context_chunks):
+        return make_verification_report(passed=False, supported_ratio=0.0, unsupported=[answer])
+
+    monkeypatch.setattr(graph, "hybrid_search", fake_hybrid_search)
+    monkeypatch.setattr(graph, "generate_stage1", fake_generate_stage1)
+    monkeypatch.setattr(graph, "generate_stage2", fake_generate_stage2)
+    monkeypatch.setattr(graph, "check_style", fake_check_style)
+    monkeypatch.setattr(graph, "verify_answer", fake_verify_answer)
+
+    events = [event async for event in graph.run_pipeline_stream("What did Sumon do?", grade=5, book_id=uuid.uuid4())]
+
+    # Still exactly one "result" event even though stage2/style_check/verify
+    # ran through a retry internally -- intermediate attempts must never
+    # surface as their own stream events (see the module docstring).
+    assert [e.kind for e in events] == ["retrieving", "sources", "result"]
+    result = events[2].data["result"]
+    assert result.status == "refused_unverified"
+    assert result.verify_attempts == 1  # one attempt, then exhausted (verify_max_retries=0)

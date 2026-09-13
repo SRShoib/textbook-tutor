@@ -1365,3 +1365,75 @@ sidebar is a fixed-width column always visible, deferred to module 7's responsiv
 **Next:** Phase 7 module 5 — the backend SSE streaming endpoint
 (`POST /sessions/{id}/messages/stream`). Flagged as "the hard one" back in module 1's roadmap:
 `call_llm()` is synchronous and cache-first with no streaming path at all.
+
+---
+
+## 2026-09-13 — Phase 7, module 5: backend SSE streaming
+
+Backend only, per the roadmap — module 6 is where the frontend actually consumes this.
+
+**The real constraint this module is built around, found by re-reading `pipeline/graph.py`
+before touching anything:** `stage2_node` can run more than once before the graph settles —
+`style_check` and `verify` both have retry edges back to `stage2` (up to
+`(style_max_retries+1)*(verify_max_retries+1)` attempts). Only `retrieve_node` never gets retried.
+So true token-by-token relay of an in-progress LLM call would risk showing a student text the
+pipeline is about to silently discard and regenerate. Decided with the user before planning:
+**"streaming" here means real progress events the moment they genuinely happen (`retrieving` on
+the `rewrite` node's update, `sources` on `retrieve`'s), then a simulated typing effect over the
+already-fully-checked final answer** — not a live relay of in-progress tokens. Total wall-clock
+latency is unchanged from the synchronous endpoint; this is about perceived responsiveness and
+progress, not raw speed. Redesigning the retry-loop architecture to make true streaming safe
+would mean reshaping deliberate research architecture for a UI module — out of scope, not
+attempted.
+
+**Built:**
+- `pipeline/graph.py`: extracted `_build_result(final_state, question, latency_ms)` out of
+  `run_pipeline()`'s tail so it and the new streaming path can never silently drift in how they
+  assemble a `PipelineResult`. New `StreamEvent` (frozen dataclass: `kind`, `data`) and
+  `run_pipeline_stream()` — iterates LangGraph's own `_compiled.astream(inputs,
+  stream_mode="updates")` (already part of the compiled graph; no new dependency), accumulating
+  each node's update into a running `final_state` exactly like `.ainvoke()` does internally.
+  Yields `retrieving` off the `rewrite` node's update (carries the resolved `search_query`),
+  `sources` off `retrieve`'s (`build_sources()`, unchanged), then one final `result` event once
+  the graph reaches `END`. Configs that skip nodes (A has no retrieval; B never reaches verify)
+  simply never produce those intermediate updates — no special-casing needed, confirmed by the
+  off-book and verify-exhausted tests below, which still resolve to exactly one `result` event
+  each despite an internal retry.
+- `api/sessions.py`: extracted `_require_ready_book()` and `_touch_session()` (title generation +
+  `updated_at` bump) out of `create_message()` so the new route reuses the exact same bookkeeping
+  rather than a second copy that could drift — the same class of bug module 4 found once already
+  (the frontend's `SessionRead` type mirror). New `POST /sessions/{id}/messages/stream`: the
+  ownership/book-ready checks and the user-message insert + `_touch_session()` + commit all happen
+  *before* `StreamingResponse` is returned, so a 404/409 is a normal JSON error, never a broken
+  event-stream. The generator chunks the settled answer into words
+  (`_TOKEN_STREAM_DELAY_SECONDS = 0.03`, a cosmetic constant, not a config.py threshold — same
+  treatment as `graph.OFF_BOOK_REFUSAL` being a plain UI string) as `token` events, **inserts and
+  commits the assistant message before emitting any of them** (a disconnecting client loses
+  nothing — the answer is already durably saved), then `verification`, then `done` with the full
+  `MessageRead`-shaped payload so module 6 can reuse one type for both endpoints. Any mid-stream
+  exception yields a single `error` event (`{code: "STREAM_FAILED", message}`) instead of dying
+  silently — a pragmatic fifth event beyond CLAUDE.md's four named ones.
+- Tests: 3 new in `test_graph.py` (event-kind sequence for a clean answered run, an off-book
+  refusal, and a verify-exhausted run — same `monkeypatch.setattr(graph, ...)` fixtures already in
+  the file, no LangGraph internals mocked) + 4 new in `test_sessions_routes.py` (`db`-marked):
+  ownership/book-ready gating, full event-order + DB-persistence check, and the `error`-event
+  path. 254 -> 260 total, both `pytest -m "not db"` and `pytest -m db` green.
+
+**Verified live** against the real ingested book with a real `gpt-4o-mini` key, every SSE line
+timestamped as it arrived (not just content-checked after the fact): `retrieving` fired
+essentially instantly; `sources` took ~28s on this run (the process's first `hybrid_search()`
+call since a server restart, cold-loading `bge-m3`) but still fired the moment retrieval actually
+finished, not before; a further ~9s of real pipeline work (stage 1, stage 2, style_check, verify)
+elapsed before the first `token`; then real per-token gaps of ~30-40ms matching the configured
+delay; a genuine `verification` event (7 real NLI-scored sentences, all `supported: true`); a
+`done` payload whose `readability` honestly shows `passed: false` (one 18-word sentence over the
+grade's 14-word cap) — the real style_check result, not smoothed over for the demo. Confirmed via
+separate `GET` calls that the session's title was set (`generate_title()`, same as the
+non-streaming path) and the assistant message persisted with content byte-identical to the
+concatenated `token` events.
+
+**Not done, out of scope:** frontend consumption (module 6); `POST /evaluate` as a real API route
+(Phase 5 leftover, unrelated to this module).
+
+**Next:** Phase 7 module 6 — the real chat screen: consume this endpoint, source lesson card,
+the four status designs, and the collapsible evidence panel decided back in module 1.

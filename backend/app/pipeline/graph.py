@@ -101,8 +101,9 @@ import asyncio
 import re
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
@@ -413,6 +414,33 @@ class PipelineResult:
     verify_attempts: int
 
 
+def _build_result(final_state: dict, question: str, latency_ms: int) -> PipelineResult:
+    """Shared tail for run_pipeline() and run_pipeline_stream() -- both hand
+    this the same shape of final_state (whether reached via .ainvoke() or by
+    accumulating .astream()'s per-node updates), so the two can never
+    silently drift into building the message differently."""
+    # Config A never runs retrieve_node, so `retrieval` is absent, not just
+    # empty — every field that's normally read off it falls back to the
+    # "no book was consulted" shape instead.
+    retrieval: RetrievalResult | None = final_state.get("retrieval")
+    return PipelineResult(
+        answer=final_state["answer"],
+        status=final_state["status"],
+        sources=build_sources(retrieval) if retrieval is not None else [],
+        best_score=retrieval.best_score if retrieval is not None else 0.0,
+        latency_ms=latency_ms,
+        config_version=get_settings().config_version,
+        llm=final_state.get("final_llm"),
+        context_texts=[c.text for c in retrieval.context_chunks] if retrieval is not None else [],
+        search_query=final_state.get("search_query", question),
+        stage1_answer=final_state.get("stage1_answer"),
+        style=final_state.get("style"),
+        style_attempts=final_state.get("style_attempts", 0),
+        verification=final_state.get("verification"),
+        verify_attempts=final_state.get("verify_attempts", 0),
+    )
+
+
 async def run_pipeline(
     question: str,
     grade: int,
@@ -434,24 +462,59 @@ async def run_pipeline(
         }
     )
     latency_ms = int((time.monotonic() - start) * 1000)
+    return _build_result(final_state, question, latency_ms)
 
-    # Config A never runs retrieve_node, so `retrieval` is absent, not just
-    # empty — every field that's normally read off it falls back to the
-    # "no book was consulted" shape instead.
-    retrieval: RetrievalResult | None = final_state.get("retrieval")
-    return PipelineResult(
-        answer=final_state["answer"],
-        status=final_state["status"],
-        sources=build_sources(retrieval) if retrieval is not None else [],
-        best_score=retrieval.best_score if retrieval is not None else 0.0,
-        latency_ms=latency_ms,
-        config_version=get_settings().config_version,
-        llm=final_state.get("final_llm"),
-        context_texts=[c.text for c in retrieval.context_chunks] if retrieval is not None else [],
-        search_query=final_state.get("search_query", question),
-        stage1_answer=final_state.get("stage1_answer"),
-        style=final_state.get("style"),
-        style_attempts=final_state.get("style_attempts", 0),
-        verification=final_state.get("verification"),
-        verify_attempts=final_state.get("verify_attempts", 0),
-    )
+
+@dataclass(frozen=True)
+class StreamEvent:
+    """What run_pipeline_stream() yields -- pure pipeline-progress data, no
+    HTTP/SSE-wire-format concerns (CLAUDE.md: pipeline/ has no FastAPI
+    imports). api/sessions.py turns these into `event: ...\\ndata: ...`
+    lines and adds the token/verification/done events that come from
+    presentation choices (typing effect, DB write), not pipeline state."""
+
+    kind: Literal["retrieving", "sources", "result"]
+    data: dict[str, Any]
+
+
+async def run_pipeline_stream(
+    question: str,
+    grade: int,
+    book_id: uuid.UUID,
+    *,
+    session_id: uuid.UUID | None = None,
+    provider: str = "openai",
+) -> AsyncIterator[StreamEvent]:
+    """Same graph, same run_pipeline() result at the end -- the only
+    difference is observing LangGraph's own node-by-node update stream
+    (.astream(), already part of the compiled graph, no new dependency)
+    instead of waiting for .ainvoke()'s single final state. Only
+    retrieve_node's output is ever safe to reveal early: it's the one node
+    with no retry edge back to it, so once it fires, `retrieval` is final.
+    stage2 can and does re-run inside the style_check/verify retry loops --
+    surfacing any of *those* intermediate attempts would show a student text
+    the pipeline is about to silently discard and replace. See the Module 5
+    plan for the full reasoning; api/sessions.py is where the settled final
+    answer gets chunked into a simulated typing effect."""
+    start = time.monotonic()
+    inputs = {
+        "question": question,
+        "grade": grade,
+        "book_id": book_id,
+        "session_id": session_id,
+        "provider": provider,
+        "pipeline_config": "D",
+    }
+    final_state: dict[str, Any] = dict(inputs)
+
+    async for update in _compiled.astream(inputs, stream_mode="updates"):
+        for node_name, node_update in update.items():
+            final_state.update(node_update)
+            if node_name == "rewrite":
+                yield StreamEvent("retrieving", {"search_query": node_update.get("search_query", question)})
+            elif node_name == "retrieve":
+                yield StreamEvent("sources", {"sources": build_sources(node_update["retrieval"])})
+
+    latency_ms = int((time.monotonic() - start) * 1000)
+    result = _build_result(final_state, question, latency_ms)
+    yield StreamEvent("result", {"result": result})
