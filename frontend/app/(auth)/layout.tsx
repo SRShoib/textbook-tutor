@@ -1,5 +1,6 @@
 import { BookOpen, ShieldCheck, Sparkles } from "lucide-react";
 import { Logo } from "@/components/logo";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const FEATURES = [
   { icon: BookOpen, text: "Answers grounded in your own textbook, page by page" },
@@ -10,6 +11,14 @@ const FEATURES = [
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex flex-1">
+      {/* Fixed regardless of viewport -- there's no signed-in sidebar here
+          to hold the toggle, and this needs to reach both the mobile
+          single-column view and the desktop split layout. Sits over the
+          right-hand form panel (light/dark tokens), not the always-dark
+          branded panel, so its icon color always has real contrast. */}
+      <div className="fixed top-4 right-4 z-10">
+        <ThemeToggle />
+      </div>
       {/* Branded panel -- hidden below md, where the small logo above the
           form (rendered further down) carries the brand instead. */}
       <div className="relative hidden w-1/2 items-center justify-center overflow-hidden bg-gradient-to-br from-indigo-600 to-indigo-900 p-12 text-white md:flex">

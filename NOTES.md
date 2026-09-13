@@ -1790,4 +1790,46 @@ confirms the swap is correctly scoped to chat content only, not a global regress
 overflow) and confirmed the enlarged input/button still fit the pill correctly. `tsc --noEmit`,
 lint, and `next build` all clean.
 
+**A tenth round: no dark-mode control existed anywhere before login/register.** Added the existing
+`ThemeToggle` to `app/(auth)/layout.tsx`, fixed-positioned top-right (`fixed top-4 right-4 z-10`)
+so it reaches both the mobile single-column view and the desktop split layout, and specifically
+over the right-hand form panel rather than the always-dark branded panel, so its icon color always
+has real contrast.
+
+This surfaced a genuine, pre-existing bug in `components/theme-toggle.tsx`, not just a missing
+feature -- caught from the dev server's own console output, not a screenshot: a real, reproducible
+"Hydration failed" React error on every load of `/login`. The component's `resolvedTheme ===
+undefined` check (written during the redesign round, to dodge a `set-state-in-effect` lint
+violation) only avoided a *mismatch* by coincidence in its one prior usage -- the sidebar -- because
+`AppLayout` gates all of its children behind a client-only auth-loading check, so `ThemeToggle`
+was never actually present in the real server-rendered HTML there in the first place; nothing ever
+hydration-diffed it. `app/(auth)/layout.tsx` is a plain server-rendered page with no such gate, so
+this was the first time `ThemeToggle` truly had to match between server and client, and it didn't:
+by the client's first hydration pass, `resolvedTheme` was already resolved to a real value while
+the server had rendered the `undefined`-branch placeholder div. Fixed by replacing that check with
+`useSyncExternalStore(emptySubscribe, () => true, () => false)` -- its `getServerSnapshot` is the
+actual sanctioned way to deliberately render one thing on the server/first-hydration pass and swap
+after, which React treats as an intentional transition rather than a mismatch, and (unlike a
+`useState` + `useEffect(() => setMounted(true))` mount flag) involves no `setState` inside an
+effect, so the lint rule that motivated the original approach still doesn't fire.
+
+While chasing why the toggle wasn't even visually appearing (before finding the hydration bug),
+also hit and fixed an unrelated dev-environment issue worth recording: the running Next.js dev
+server's Turbopack CSS pipeline stopped picking up newly-added utility classes (`top-4`, `right-4`,
+`z-10` -- confirmed absent from the actually-served compiled CSS bundle by fetching it directly,
+even after a real file edit and a several-second wait) after being left running across this
+entire long session. A second real edit sometimes got picked up and sometimes didn't -- genuinely
+flaky, not something to chase further -- resolved cleanly by stopping the stale dev server process
+and starting a fresh one, after which every subsequent edit compiled correctly and consistently.
+Dev-tooling-only, not an application bug, but worth knowing: if a utility class visibly has no
+effect despite the DOM showing the right class name, check the actually-served CSS bundle before
+assuming the component code is wrong.
+
+Verified on a fresh server: no hydration/console errors on `/login` (only the pre-existing,
+unrelated 401 refresh-retry noise already known from earlier rounds), toggle renders and functions
+at the exact intended position on both desktop (`x:1392,y:16` at 1440px) and mobile (`x:342,y:16`
+at 390px, no horizontal overflow), dark mode applies correctly across both the branded panel and
+the form card, and the full register -> upload -> chat flow still works end to end. `tsc --noEmit`,
+lint, and `next build` all clean.
+
 **Next:** whatever the user directs -- `POST /evaluate` as a real route, or Phase 8 thesis writing.
