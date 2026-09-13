@@ -4,6 +4,12 @@ What: POST /books accepts a PDF, stores it, and kicks off ingest_book() as a
 Why: ingest.py can take a while (PDF parsing + bge-m3 embedding of ~150
      chunks), so CLAUDE.md's API convention is 202 + poll rather than making
      the client wait on one long request.
+Why both routes require a caller but don't scope by it: unlike sessions,
+     books have no user_id column -- once ingested, a book is a shared
+     resource every student's session can point at, not private data. The
+     auth dependency here only gates who can trigger an upload/lookup at
+     all (this had none until Phase 7 module 3, a gap from being written in
+     Phase 1 before JWT auth existed), matching every other route's baseline.
 """
 
 import uuid
@@ -13,6 +19,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile,
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import get_current_user_id
 from app.core.db import get_db
 from app.core.errors import AppError
 from app.models.book import Book, BookStatus
@@ -32,6 +39,7 @@ async def create_book(
     file: UploadFile = File(...),
     title: str = Form(...),
     grade: int = Form(...),
+    user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> Book:
     if file.content_type != "application/pdf":
@@ -59,7 +67,11 @@ async def create_book(
 
 
 @router.get("/{book_id}", response_model=BookRead)
-async def get_book(book_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> Book:
+async def get_book(
+    book_id: uuid.UUID,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> Book:
     book = await db.get(Book, book_id)
     if book is None:
         raise AppError("BOOK_NOT_FOUND", f"No book with id {book_id}.", status_code=404)

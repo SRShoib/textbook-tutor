@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     login_rate_limit_window_seconds: int = 300
     allow_anonymous: bool = True
 
+    # --- frontend (Phase 7) ---
+    # The Next.js dev origin allowed to send credentialed (cookie-bearing)
+    # requests. Must be an explicit origin, never "*" -- CORSMiddleware
+    # rejects allow_credentials=True paired with a wildcard, and a wildcard
+    # would defeat the refresh cookie's httpOnly/SameSite protection anyway.
+    frontend_origin: str = "http://localhost:3000"
+
     # --- eval ---
     eval_mode: bool = False
 

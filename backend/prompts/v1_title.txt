@@ -1,0 +1,7 @@
+A student asked their textbook tutor chatbot this question:
+
+"{question}"
+
+Write a short title for this conversation: 3 to 6 words, plain text, no quotation marks, no ending punctuation. Describe the topic of the question rather than repeating it word for word.
+
+Title:

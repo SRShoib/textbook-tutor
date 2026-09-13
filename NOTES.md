@@ -1056,3 +1056,257 @@ redefinition (dedupe-before-scoring); rebuilding the 30-failure categorized tabl
 against `styfix_dev_D_20260912T203830Z.jsonl` (the numbers above are counts only,
 not the full table — the previous full table was built against the pre-style-fix
 run and is now stale). Test suite: 229 -> 235.
+
+---
+
+## 2026-09-13 — Phase 7, module 1: frontend foundation + auth
+
+Scope: `frontend/` didn't exist yet. Planned as one module (scaffold, design
+system, API client, register/login), not the whole phase, per CLAUDE.md's working
+rhythm.
+
+**Finding that reshaped the plan, before any frontend code was written:** Phase 5
+was never finished — only module 1 (JWT auth) exists. `api/sessions.py` has just
+`POST /sessions` (create) and `POST /sessions/{id}/messages` (synchronous); no
+session list, rename, soft-delete, title generation, or SSE route, and no CORS
+middleware at all, so a browser on `localhost:3000` could not call this API in any
+form. Decided with the user: close each gap as its own small backend module,
+immediately before the frontend module that needs it (sessions CRUD before the
+sidebar, SSE before the chat screen) — not one big Phase 5 catch-up, not against
+mocks. Full Phase 7 module order (7 modules) written into the plan file for
+reference each time a new module starts.
+
+Also decided with the user: upload progress is an honest indeterminate checklist
+driven only by the real `processing -> ready -> failed` transition (`books` has no
+per-stage signal and this module doesn't add one); every answer gets a collapsible
+"how I checked this" evidence panel over the child-facing source card, showing
+`supported_ratio`, per-sentence entailment and readability numbers — the live demo
+of contributions 1 and 3 at the defense.
+
+**Built:**
+- Backend (small, required before anything in a browser could work at all):
+  `CORSMiddleware` in `main.py` (explicit origin + `allow_credentials=True`, never
+  `"*"` — that pairing is rejected by the middleware anyway, and a wildcard would
+  defeat the refresh cookie's protection), new `frontend_origin` setting
+  (`config.py` + `.env.example`).
+- `frontend/` scaffolded from scratch: Next.js 16 (App Router, Turbopack, React
+  19), TypeScript strict, Tailwind v4, shadcn/ui (`base-nova` style, `@base-ui/react`
+  primitives), Framer Motion. Every dependency create-next-app/shadcn installed
+  with a `^` range was re-pinned to its exact resolved version in `package.json`,
+  matching this project's reproducibility rule.
+- `lib/types.ts` — hand-written TS mirrors of every Pydantic schema and pipeline
+  dataclass a message carries (`MessageRead`, `VerificationReport`,
+  `StyleReport`, `SourceCitation`, ...), not generated from `openapi.json`.
+- `lib/api.ts` — the one `apiFetch()` every call goes through: in-memory-only
+  access token (never `localStorage`, since these are children's accounts),
+  401-triggers-refresh-then-retry-once, unwraps `core/errors.py`'s
+  `{"error":{code,message}}` shape into a typed `ApiError`.
+- `lib/auth-context.tsx` — `AuthProvider`/`useAuth()`: silent refresh on mount to
+  recover a session after a hard reload, `login`/`register`/`logout`.
+- `lib/motion.ts` — shared transform/opacity-only Framer variants;
+  `<MotionConfig reducedMotion="user">` in the root layout handles
+  prefers-reduced-motion globally so individual components never check it
+  themselves; a matching CSS-level `@media (prefers-reduced-motion: reduce)`
+  block in `globals.css` covers shadcn's own non-Framer transitions.
+- `app/layout.tsx` — Noto Sans Bengali + Inter loaded via `next/font/google` as a
+  single stacked `--font-sans` (Inter first, Bengali glyphs fall through
+  automatically since the two scripts don't overlap); fixed a dangling
+  `--font-sans: var(--font-sans)` self-reference left by `shadcn init`'s default
+  `globals.css`.
+- `app/(auth)/{login,register}` + `app/(app)/layout.tsx` (client-side guard, no
+  edge middleware — the access token lives only in memory, so there's nothing
+  for middleware outside React to inspect anyway) + a placeholder `/chat` page
+  (just enough to prove the guard/redirect chain end to end; upload/sidebar/chat
+  are later modules).
+
+**A real bug found and fixed via live testing, not just unit-level checks:**
+Playwright-driven registration followed by a page reload intermittently bounced
+the new user straight back to `/login` instead of restoring the session. Root
+cause, confirmed by capturing the actual network trace: React Strict Mode
+double-invokes effects in dev, so `AuthProvider`'s mount-time silent refresh fired
+two concurrent `POST /auth/refresh` calls presenting the same cookie. The
+single-flight guard the plan called for existed in `lib/api.ts` but was only wired
+into `apiFetch`'s own 401-retry path — the direct call from the mount effect
+bypassed it entirely. When the two requests' DB reads/writes in `api/auth.py`
+interleaved the wrong way, the second saw the first's rotation as a replay and
+`REFRESH_TOKEN_REUSED` fired, revoking every token for that user, including the
+one the first request had just issued. Fixed by exporting one shared
+`refreshSession()` (returns the full `TokenResponse`, not just the token string)
+that both the mount effect and `apiFetch`'s 401 handling now call through — only
+one real request ever goes out no matter how many callers ask concurrently.
+Verified with a 10-iteration Playwright stress test (0/10 lost the session,
+confirmed via network trace that no duplicate `POST /auth/refresh` reaches the
+server) after the fix, versus a reproducible failure before it.
+
+**Verified live** (backend `pytest -m "not db"`: 220 passed, unaffected by the CORS
+change; frontend `tsc --noEmit` and `next build` clean; real Postgres + FastAPI +
+Next.js dev server, driven with Playwright since no `chromium-cli`/project run
+skill existed yet): register -> lands on `/chat` authed -> hard reload survives via
+silent refresh -> logout clears the httpOnly cookie and redirects to `/login` ->
+direct navigation to `/chat` while logged out bounces back to `/login`. Confirmed
+no access token in `localStorage`/`sessionStorage` at any point; confirmed
+`refresh_token` cookie is `httpOnly`/`SameSite=Lax`. Confirmed the Bengali font
+fallback renders real conjuncts correctly (`তুমি কেমন আছো?`, no tofu) and that
+`prefers-reduced-motion: reduce` renders the login card at full opacity
+immediately rather than stuck mid-animation.
+
+**Not yet resolved, flagged for the user rather than decided unilaterally:**
+`frontend/.gitignore` (create-next-app's default) excludes any `.env*`, which also
+silently excludes the tracked-on-purpose `frontend/.env.local.example` — the root
+repo's own `.env.example` is tracked because the root `.gitignore` only excludes
+the exact name `.env`, not the broader pattern. CLAUDE.md requires asking before
+touching `.gitignore`, so this wasn't fixed; the user needs to either add a
+`!.env.local.example` exception or decide the example isn't worth tracking.
+
+**Numbers:** 220 backend tests (unchanged — this module touched no `pipeline/`
+code), 0 frontend tests (none in scope for this module — CLAUDE.md only requires
+tests for `pipeline/`; `tsc --noEmit` + `next build` + the Playwright checks above
+are the safety net until/unless the user wants Playwright added as a real suite).
+
+**Next:** Phase 7 module 2 — backend sessions CRUD (`GET /sessions`,
+`GET /sessions/{id}/messages`, rename, soft-delete) + title generation, per the
+fixed module order in the plan file.
+
+---
+
+## 2026-09-13 — Phase 7, module 2: backend sessions CRUD + title generation
+
+Closed the loop on the previous entry's `.gitignore` item first: user chose the
+`!.env.local.example` exception; `frontend/.gitignore` now tracks it (confirmed
+with `git ls-files --others --exclude-standard`, not just `git check-ignore`,
+since a negated pattern still shows up in `check-ignore -v`'s match line even
+though the path is no longer actually ignored).
+
+**Built** (backend only — no frontend UI in this module, that's module 4):
+- `backend/prompts/v1_title.txt` + `backend/app/pipeline/title.py` —
+  `generate_title()`, same shape as `rewrite.py` (own prompt version, one
+  `call_llm()` wrapper). Falls back to `_fallback_title()` (pure
+  first-6-words truncation) on any LLM error or an empty response — a title
+  is a UX nicety, never allowed to block message creation. Always
+  `provider="openai"` regardless of `pipeline_config` (A/B/C/D) — titling
+  isn't part of the ablation being measured.
+- `api/sessions.py`: new `GET /sessions` (list, scoped to caller, ordered
+  `updated_at DESC`), `GET /sessions/{id}` (single), `GET /sessions/{id}/messages`
+  (full history, chronological, no pagination), `PATCH /sessions/{id}` (rename,
+  1-200 chars), `DELETE /sessions/{id}` (soft-delete, never hard — matches
+  existing rule). All five share a new `_get_owned_session()` helper
+  (wrong-id/not-yours/soft-deleted all collapse to the same `SESSION_NOT_FOUND`
+  404, refactored out of the pre-existing `create_message()` too).
+  `create_message()` also gained two side effects, both committed alongside the
+  user's message and before the pipeline runs: sets `session.title` via
+  `generate_title()` when still `None` (self-healing -- if generation failed on
+  message 1, message 2 tries again, no extra state needed), and bumps
+  `session.updated_at` on every message.
+- `schemas/session.py`: new `SessionUpdate`; `SessionRead` gained `updated_at`
+  (column already existed since Phase 1's `0001_initial` -- **no new migration
+  needed** for this whole module).
+- Tests: `test_title.py` (7, pure functions, `call_llm` monkeypatched) +
+  `test_sessions_routes.py` (8, `db`-marked, transaction-rollback fixture --
+  same documented exception to "skip route tests" as Phase 5's auth tests):
+  list scoping + activity ordering, single-get 404 across users, message-history
+  scoping, rename + validation, soft-delete then idempotent 404, auto-title
+  fires once and survives a second message unchanged, `updated_at` monotonically
+  bumps. 235 -> 250 total (227 non-`db` + 23 `db`, both green).
+
+**A real gap found while reading `create_message()` before touching it, not
+something the plan predicted precisely:** the session row was never touched
+when a message was added, so sorting the sidebar by `updated_at` would have
+silently meant "session creation time," not "last activity." Fixed as part of
+this module rather than filed separately, since the fix is one line in the
+same function already being edited for title generation.
+
+**Verified live**, not just via the mocked route tests, against the real
+ingested Class 5 book (`97a7267b-...-4be4355e1a4f`, still `ready`/135 chunks)
+with a real `gpt-4o-mini` key: created a session (`title: null`), asked "What
+is a noun?" (38.5s, real pipeline run, `status: answered`) -> title became
+"Understanding the Basics of Nouns", `updated_at` advanced past `created_at`.
+Second message ("Give me an example.", correctly rewritten by the pre-existing
+`rewrite.py` into a standalone query, 6.0s) -> title unchanged, `updated_at`
+advanced again. `GET /sessions` correctly sorted this session first, ahead of
+~30 older eval-runner sessions already sitting in the dev DB (each of which sets
+its own descriptive `"eval: <config> <timestamp>"` title directly, bypassing
+`generate_title()` entirely -- confirmed that doesn't conflict, both paths just
+write the same nullable column). `GET /sessions/{id}/messages` returned all 4
+messages in correct chronological order. Confirmed unauthenticated requests
+still resolve (200, not 401) only because `ALLOW_ANONYMOUS=true` in this local
+`.env` — expected dev behavior via the pre-existing `get_current_user_id()`
+fallback, not a new auth gap; still correctly 404s on another (nonexistent)
+session id under that same dev-user identity.
+
+**Not done, out of scope for this module:** `POST /evaluate` and the SSE
+streaming route are still open (modules 5 and later in the roadmap); this
+module only closed sessions CRUD + titling.
+
+**Next:** Phase 7 module 3 — upload + class picker (`POST /books`, poll
+`GET /books/{id}`, the honest indeterminate stage checklist decided with the
+user, then create a session), per the plan file's fixed module order.
+
+---
+
+## 2026-09-13 — Phase 7, module 3: upload + class picker
+
+**Found while reading `api/books.py` before touching it:** `POST /books` and
+`GET /books/{id}` had no auth dependency at all — anyone, logged in or not,
+could upload a PDF to this server. Written in Phase 1, before JWT auth
+existed, never revisited. Closed the same way CORS was in module 1: small,
+necessary, flagged rather than silently patched. Both routes now require
+`get_current_user_id()` (same `ALLOW_ANONYMOUS` dev-user fallback as every
+other route) — not user-scoped data (no `books.user_id` column, schema is
+fixed), so this only gates *who can trigger* an upload/lookup, not which
+books they can see.
+
+**Built:**
+- `backend/app/api/books.py`: the auth dependency above.
+- `backend/tests/test_books_routes.py` (4, `db`-marked): 401 without auth on
+  both routes; an authenticated upload that hash-dedupes against a
+  pre-inserted `Book` row returns the existing `ready` book (asserting the
+  *submitted* title/grade are correctly ignored in favor of the existing
+  row's) without ever touching `ingest_book()` — a real, non-dedup ingest
+  stays out of the route-test suite (loads bge-m3 for real; already covered
+  by Phase 1's `test_ingest.py` + this session's live checks below). 254 ->
+  258 total.
+- `frontend/lib/api.ts`: `apiUpload()` — same `ApiError`/401-retry handling
+  as `apiFetch`, `FormData` body instead of JSON.
+- `frontend/app/(app)/upload/page.tsx` (new) — file + title (auto-derived
+  from the filename, editable) + class picker (1-12, defaults to
+  `user.grade`) -> `apiUpload("/books", ...)`. A `status: "ready"` response
+  (hash-dedup) skips straight to session creation; otherwise polls
+  `GET /books/{id}` every 2s, no hard timeout, with a "this can take a few
+  minutes" note past 20s. The checklist is four fixed labels that animate as
+  "working" together while `processing` and flip to done together on
+  `ready` — never implying it knows which step is "really" running, since
+  `books.status` still only has three values. `failed` shows a plain error
+  + "Try again" reset (no failure-reason column exists to say more).
+- `frontend/app/(app)/chat/[sessionId]/page.tsx` (new, replaces module 1's
+  static placeholder) — fetches the real session via `GET /sessions/{id}`
+  (module 2) instead of showing a canned string. Still a placeholder for
+  real chat (module 6).
+- Removed `frontend/app/(app)/chat/page.tsx` (no `sessionId`); `app/page.tsx`
+  and both auth pages now redirect an authed user to `/upload`, not `/chat`.
+
+**Judgment call, flagged rather than silently decided:** every login
+currently re-runs the upload flow — there's no "resume a previous session"
+until module 4's sidebar exists. Cheap in practice (hash-dedup returns the
+existing ready book instantly), and deliberately left as a known temporary
+gap rather than reaching into module 4's scope early.
+
+**Verified live**, twice, with a real browser (Playwright, no project run
+skill existed yet so same pattern as module 1): (1) registered, landed on
+`/upload` (not `/chat`), uploaded the exact already-ingested book PDF
+(`97a7267b-...-4be4355e1a4f.pdf`) — hash-dedup fired, redirected straight to
+`/chat/{new session id}` showing "New conversation" / "Class 5" with no
+processing wait. (2) Generated a minimal-but-valid PDF with PyMuPDF
+containing no real textbook content, uploaded it as a genuinely new file
+(different hash, forces a real `ingest_book()` run) — caught the checklist
+mid-"processing" (screenshot), watched `ingest.py`'s real content-parsing
+step fail fast (no Contents page to find) and flip the book to `failed`,
+confirmed the error state renders with a working "Try again" that resets
+the form. All three checklist phases (processing / failed / reset) are
+real, not simulated.
+
+**Not done, out of scope:** no `GET /books` list endpoint (nothing in this
+module's design needs one — a student always picks a file, dedup handles
+repeats); the "resume a session" gap above stays open until module 4.
+
+**Next:** Phase 7 module 4 — the sidebar (session list, rename, delete,
+active-session state), per the plan file's fixed module order.
