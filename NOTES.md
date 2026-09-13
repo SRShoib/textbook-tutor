@@ -1310,3 +1310,58 @@ repeats); the "resume a session" gap above stays open until module 4.
 
 **Next:** Phase 7 module 4 — the sidebar (session list, rename, delete,
 active-session state), per the plan file's fixed module order.
+
+---
+
+## 2026-09-13 — Phase 7, module 4: sidebar
+
+Frontend-only module — no backend changes, 254 backend tests unaffected.
+
+**Built:**
+- `frontend/lib/format.ts` — `relativeTime()`, hand-rolled ("just now"/"5m ago"/"3h ago"/
+  "2d ago", falling back to a plain date past a week), not a `date-fns` dependency for one
+  display detail.
+- `frontend/components/sidebar.tsx` (new) — fetches `GET /sessions` (module 2) on mount and on
+  every route change (`usePathname()` in the effect deps), so a session created by `/upload`
+  shows up the moment you land on `/chat/{id}` with no shared state between the two pages. "+ New
+  chat" link to `/upload`; each row shows title (or "New conversation"), relative time, class;
+  active session highlighted via `useParams().sessionId`. Inline rename (pencil icon -> input ->
+  `PATCH` on Enter/blur) and delete (trash icon -> `window.confirm` -> `DELETE`, redirecting to
+  `/upload` if the deleted session was the one open). Empty and error states, both non-blocking.
+- `app/(app)/layout.tsx`: renders `<Sidebar />` in the slot module 1 left for it.
+
+**Two real bugs found via live testing, not caught by lint/typecheck:**
+1. **`frontend/lib/types.ts`'s `SessionRead` was missing `updated_at`** — added to the backend
+   schema in module 2, never mirrored to the frontend types because module 2 touched no frontend
+   files. Caught immediately by `tsc --noEmit` the moment this module tried to read
+   `session.updated_at`, not by anything module 2 itself ran (a hand-written-mirror cost flagged
+   as a tradeoff back in module 1's plan, now a concrete example of it).
+2. **`eslint-plugin-react-hooks`'s newer `set-state-in-effect` rule** correctly flagged a
+   synchronous `setLoading(true)` at the top of the session-list effect. Fixed by dropping it
+   entirely rather than working around it: the effect re-runs on every navigation, and
+   re-flashing the whole sidebar to a loading state on every click would have been worse UX than
+   just leaving the (still-valid) previous list visible until the fresh fetch resolves — `loading`
+   now only ever goes true -> false once, on first mount.
+
+**A third bug found only by driving a real browser, invisible to both lint and a human reading
+the diff:** `<Button render={<Link href="/upload" />}>` (Base UI's polymorphic-rendering prop,
+not Radix's `asChild` — this project's shadcn install uses `@base-ui/react`) rendered without
+error but logged a real console warning: Base UI's `Button` defaults to assuming the element it's
+given IS a native `<button>`, and a `<Link>` renders an `<a>`. Fixed with `nativeButton={false}`,
+which is exactly what the warning's own message pointed at. Would have shipped invisibly — the
+button worked and looked identical either way; only the browser console surfaced the
+accessibility-semantics gap.
+
+**Verified live** (Playwright, both servers running, real Postgres): fresh account -> empty-state
+sidebar -> uploaded the real book twice (dedup path both times) -> confirmed 2 real distinct
+sessions appear, second one highlighted -> renamed the active session inline -> **reloaded the
+page** to confirm the rename was a real `PATCH`, not just local React state (it was) -> deleted
+the active session -> redirected to `/upload`, sidebar correctly down to 1 row. No console errors
+on the final clean run.
+
+**Not done, out of scope (per the plan's judgment call):** no mobile collapse/hamburger toggle —
+sidebar is a fixed-width column always visible, deferred to module 7's responsive pass.
+
+**Next:** Phase 7 module 5 — the backend SSE streaming endpoint
+(`POST /sessions/{id}/messages/stream`). Flagged as "the hard one" back in module 1's roadmap:
+`call_llm()` is synchronous and cache-first with no streaming path at all.

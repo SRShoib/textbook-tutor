@@ -11,6 +11,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import { Sidebar } from "@/components/sidebar";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { status } = useAuth();
@@ -30,7 +31,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex flex-1">
-      {/* Sidebar slot -- built in Phase 7 module 4, once GET /sessions exists. */}
+      <Sidebar />
       <div className="flex flex-1 flex-col">{children}</div>
     </div>
   );

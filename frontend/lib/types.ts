@@ -53,6 +53,7 @@ export interface SessionRead {
   grade: number;
   title: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export type MessageRole = "user" | "assistant";
