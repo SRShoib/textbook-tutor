@@ -139,3 +139,16 @@ export interface ApiErrorBody {
     message: string;
   };
 }
+
+/**
+ * The SSE events POST /sessions/{id}/messages/stream emits (api/sessions.py).
+ * Five correspond to CLAUDE.md's named events; "error" is a pragmatic
+ * addition for a mid-stream failure, documented in that module's plan.
+ */
+export type StreamEvent =
+  | { kind: "retrieving"; data: { search_query: string } }
+  | { kind: "sources"; data: { sources: SourceCitation[] } }
+  | { kind: "token"; data: { text: string } }
+  | { kind: "verification"; data: VerificationReport }
+  | { kind: "done"; data: MessageRead }
+  | { kind: "error"; data: { code: string; message: string } };

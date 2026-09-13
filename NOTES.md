@@ -1437,3 +1437,64 @@ concatenated `token` events.
 
 **Next:** Phase 7 module 6 — the real chat screen: consume this endpoint, source lesson card,
 the four status designs, and the collapsible evidence panel decided back in module 1.
+
+---
+
+## 2026-09-13 — Phase 7, module 6: the real chat screen
+
+Frontend only — no backend changes, 260 backend tests unaffected. Replaces module 3's static
+`/chat/[sessionId]` placeholder with the actual chat experience.
+
+**Decided with the user before planning, a child-safety call, not a style one:** `graph.py`
+deliberately keeps the raw generated text on a `refused_unverified` message for error-analysis,
+and explicitly leaves how a client *displays* it as a Phase 7 decision. Since that text can be
+ungrounded, and the same question applies to the currently-unreachable `low_confidence`: the
+primary bubble for both never shows it. Instead a plain "I couldn't fully check this against your
+book" message, with the real generated text available only inside the evidence panel (collapsed by
+default, labeled "Generated but not shown to the student"). `refused_off_book`'s text is the fixed,
+safe `OFF_BOOK_REFUSAL` string and is always shown directly — no such risk there.
+
+**Built:**
+- `lib/types.ts`: `StreamEvent` discriminated union for the five SSE kinds `api/sessions.py`
+  emits (+ `error`). `lib/api.ts`: exported `API_BASE`/`API_PREFIX` (were private) so `lib/stream.ts`
+  doesn't duplicate them.
+- `lib/stream.ts` (new) — `streamMessage()`: the browser's native `EventSource` can't POST, so this
+  is `fetch()` + a manual `ReadableStream` reader, buffering and splitting on `\n\n` to parse the
+  `event:`/`data:` blocks, reusing `getAccessToken()`/`refreshSession()` from `lib/api.ts` (a single
+  401-retry, same pattern `apiFetch` already uses) rather than a parallel auth path.
+- `components/chat/`: `status-meta.ts` (the `MessageStatus -> {label, icon, className}` lookup --
+  `--destructive` theme tokens reused for `refused_unverified`, plain `amber-*` utilities for
+  `low_confidence` since no dedicated "caution" token exists for a status nothing produces yet),
+  `source-card.tsx`, `evidence-panel.tsx` (collapsed by default, plain `useState`, content fades via
+  the existing `fade` variant rather than animating height), `assistant-message.tsx` (a *settled*
+  `MessageRead` -- same component whether just-streamed or loaded from history), `streaming-message.tsx`
+  (the in-flight turn: "Reading your book…" -> sources appear immediately once real -> accumulating
+  token text with a blinking cursor), `message-list.tsx`, `chat-input.tsx`.
+- `app/(app)/chat/[sessionId]/page.tsx` rewritten: loads session + history on mount
+  (`GET /sessions/{id}`, `GET /sessions/{id}/messages`, both unchanged), `handleSend()` appends the
+  user's turn optimistically and drives `streamMessage()`'s callbacks into one `streaming` state;
+  `done` replaces it with the real `MessageRead` pushed into the settled list, so a reload renders
+  identically through `AssistantMessage` alone -- confirmed by test, not just asserted.
+
+**Verified live** (Playwright, real book, real key, no mocks for the main flow): registered,
+uploaded (dedup), sent "What is a noun?" through the real UI, and watched the actual sequence
+render correctly on screen -- the source card appeared *before* the answer text started
+("Writing an answer…"), tokens accumulated with the real per-word delay, the bubble settled to
+"Answered" with the real evidence panel (7/7 sentences supported, real entailment scores 0.97-1.00,
+readability "did not pass" with the real FK 3.28/18-word-longest-sentence numbers -- matching
+module 5's live check of the same question byte-for-byte). Reloaded the page: identical rendering
+from history alone, no special-casing needed. Separately verified all four status designs
+(including the two unreachable-in-practice ones) by intercepting the history GET with Playwright
+route mocking and rendering all four together: `answered` (neutral), `low_confidence` (amber,
+generic message), `refused_off_book` (muted, no evidence panel -- correctly nothing to show),
+`refused_unverified` (red/destructive, generic message). Confirmed the hallucinated test sentence
+appeared **zero times** in the rendered page before expanding anything, and only inside the
+labeled evidence panels after -- the child-safety decision actually holds, not just in the code.
+
+**Not done, out of scope:** module 7's polish pass (reduced-motion audit beyond what already
+exists globally, keyboard nav, responsive/mobile sidebar); `POST /evaluate` as a real route
+(Phase 5 leftover).
+
+**Next:** Phase 7 module 7 — polish pass: reduced-motion audit, keyboard nav, Bangla rendering
+check (still only spot-checked in module 1), responsive check including the sidebar's mobile
+collapse deferred there.
