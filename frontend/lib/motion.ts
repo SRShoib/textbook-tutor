@@ -14,24 +14,48 @@ export const DURATION = {
   exit: 0.12,
 } as const;
 
+// A snappier "ease-out-expo"-ish curve instead of the generic easeOut/easeIn
+// strings -- decelerates hard at the very end, which reads as more
+// deliberate/premium than a linear-ish standard ease.
+const EASE_OUT = [0.16, 1, 0.3, 1] as const;
+const EASE_IN = [0.7, 0, 0.84, 0] as const;
+
 /** Default page/card entrance: fade + small upward rise. */
 export const fadeRise: Variants = {
   hidden: { opacity: 0, y: 8 },
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: DURATION.enter, ease: "easeOut" },
+    transition: { duration: DURATION.enter, ease: EASE_OUT },
   },
   exit: {
     opacity: 0,
     y: -4,
-    transition: { duration: DURATION.exit, ease: "easeIn" },
+    transition: { duration: DURATION.exit, ease: EASE_IN },
   },
 };
 
 /** Plain fade, for content that shouldn't shift position (e.g. status swaps). */
 export const fade: Variants = {
   hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { duration: DURATION.enter, ease: "easeOut" } },
-  exit: { opacity: 0, transition: { duration: DURATION.exit, ease: "easeIn" } },
+  visible: { opacity: 1, transition: { duration: DURATION.enter, ease: EASE_OUT } },
+  exit: { opacity: 0, transition: { duration: DURATION.exit, ease: EASE_IN } },
+};
+
+/** Wraps a list of `staggerItem` children so they enter one after another
+ * instead of all at once -- e.g. a run of settled chat messages. */
+export const staggerContainer: Variants = {
+  hidden: {},
+  visible: {
+    transition: { staggerChildren: 0.06 },
+  },
+};
+
+export const staggerItem: Variants = {
+  hidden: { opacity: 0, y: 8 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: DURATION.enter, ease: EASE_OUT },
+  },
 };

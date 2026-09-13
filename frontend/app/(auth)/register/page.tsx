@@ -56,25 +56,26 @@ export default function RegisterPage() {
 
   return (
     <motion.div initial="hidden" animate="visible" variants={fadeRise}>
-      <Card>
+      <Card className="[--card-spacing:--spacing(6)]">
         <CardHeader>
-          <CardTitle>Create your account</CardTitle>
-          <CardDescription>Just enough to get started -- nothing else.</CardDescription>
+          <CardTitle className="text-2xl">Create your account</CardTitle>
+          <CardDescription className="text-base">Just enough to get started -- nothing else.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-5">
             <div className="flex flex-col gap-2">
-              <Label htmlFor="display_name">Name</Label>
+              <Label htmlFor="display_name" className="text-base">Name</Label>
               <Input
                 id="display_name"
                 autoComplete="name"
                 required
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
+                className="h-11 text-base md:text-base"
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email" className="text-base">Email</Label>
               <Input
                 id="email"
                 type="email"
@@ -82,10 +83,11 @@ export default function RegisterPage() {
                 required
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
+                className="h-11 text-base md:text-base"
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password" className="text-base">Password</Label>
               <Input
                 id="password"
                 type="password"
@@ -94,17 +96,18 @@ export default function RegisterPage() {
                 minLength={8}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
+                className="h-11 text-base md:text-base"
               />
-              <p className="text-xs text-muted-foreground">At least 8 characters.</p>
+              <p className="text-sm text-muted-foreground">At least 8 characters.</p>
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="grade">Class</Label>
+              <Label htmlFor="grade" className="text-base">Class</Label>
               <select
                 id="grade"
                 required
                 value={grade}
                 onChange={(event) => setGrade(Number(event.target.value))}
-                className="border-input h-9 rounded-lg border bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                className="border-input h-11 rounded-lg border bg-transparent px-3 text-base shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
               >
                 {GRADES.map((g) => (
                   <option key={g} value={g}>
@@ -114,15 +117,15 @@ export default function RegisterPage() {
               </select>
             </div>
             {error && (
-              <p role="alert" className="text-sm text-destructive">
+              <p role="alert" className="text-base text-destructive">
                 {error}
               </p>
             )}
-            <Button type="submit" disabled={submitting} className="w-full">
+            <Button type="submit" disabled={submitting} size="lg" className="w-full text-base">
               {submitting ? "Creating account…" : "Create account"}
             </Button>
           </form>
-          <p className="mt-4 text-center text-sm text-muted-foreground">
+          <p className="mt-5 text-center text-base text-muted-foreground">
             Already have an account?{" "}
             <Link href="/login" className="text-primary underline underline-offset-4">
               Log in

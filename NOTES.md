@@ -1563,3 +1563,231 @@ keyboard) is fixed; deeper accessibility work was never asked for and isn't free
 sessions CRUD + titles, upload + class picker, sidebar, backend SSE, the real chat screen, and this
 polish pass. Remaining project work is Phase 5's leftover `POST /evaluate` route (not blocking) and
 Phase 8, thesis writing.
+
+---
+
+## 2026-09-13 — Frontend visual redesign: Indigo & Amber design system
+
+Not a Phase 7 module (that closed with the previous entry) -- a user-requested visual pass on top
+of it: the functional app read as "generic shadcn gray," and the user asked for a real color
+palette, a more premium feel, and effects/animation. Frontend only, no backend changes, 260
+backend tests unaffected. User picked **Indigo & Amber** from three palette directions presented
+with concrete hex/OKLCH previews (the other two: Emerald & coral, Terracotta & deep teal).
+
+**Built:**
+- `app/globals.css`: every color token rebuilt on Tailwind v4's own built-in `--color-indigo-*`/
+  `--color-amber-*`/`--color-slate-*`/`--color-red-*` scales (confirmed these exist in
+  `node_modules/tailwindcss/theme.css` before using them, rather than hand-guessing OKLCH values) --
+  indigo primary, amber accent (`--accent`/`--accent-foreground` were confirmed unused by every
+  installed shadcn component before repurposing that slot), slate neutrals, indigo-tinted sidebar
+  active state, indigo focus rings. Light and dark variants for all of it.
+- **Dark mode actually works now.** The tokens existed since shadcn's original scaffold but nothing
+  ever added the `.dark` class -- no `ThemeProvider` was mounted, even though `next-themes` has been
+  an installed dependency since module 1 (pulled in by the `sonner` toast component, unused since).
+  Mounted it in `app/layout.tsx` (`attribute="class"`, `defaultTheme="system"`, `enableSystem`) and
+  added `components/theme-toggle.tsx`, placed in the sidebar footer.
+- `lib/motion.ts`: added `staggerContainer`/`staggerItem` (list children animate in sequence) and
+  switched the eased curves from generic `"easeOut"`/`"easeIn"` strings to a custom cubic-bezier
+  for a snappier feel. `components/ui/button.tsx` gained a transform-only
+  `hover:scale-[1.02] active:scale-[0.97]` press micro-interaction on every variant -- no box-shadow
+  transitions anywhere, staying strictly within the original "transform and opacity" brief.
+- New `components/logo.tsx` (icon badge + wordmark, no image asset needed) on auth pages and the
+  sidebar; `app/(auth)/layout.tsx` gained a subtle indigo/amber gradient background.
+- `app/(app)/upload/page.tsx`: the processing checklist's four rows get distinct icons
+  (`BookOpen`/`Layers`/`Sparkles`/`Check`) instead of identical spinners, plus the new stagger
+  animation -- still shown "in progress" together per the existing module 3 decision, just richer.
+- `components/sidebar.tsx`: logo + close button in a proper header, active-row indigo tint with a
+  left accent bar, theme toggle footer.
+- `components/chat/`: `message-list.tsx` now actually animates messages in
+  (`staggerContainer`/`staggerItem` -- previously plain, unanimated divs, a real gap from module 6);
+  bot/user avatar badges on `assistant-message.tsx`/`streaming-message.tsx`/`message-list.tsx`;
+  `status-meta.ts` retuned to the new palette (emerald for `answered` -- deliberately *not* the
+  brand indigo, so status color stays visually distinct from UI-chrome color; amber/red/muted
+  unchanged in kind, just retuned); `chat-input.tsx` became a pill-shaped bar with a rounded indigo
+  send button.
+
+**A real, if minor, visual bug found and fixed via live screenshots, not caught by
+lint/typecheck:** the evidence panel and source card both used `bg-muted/40`-ish backgrounds,
+which blended into the `answered` status bubble's new emerald tint -- barely distinguishable as a
+separate layer. Switched both to `bg-card/80` for a background that reads as a distinct surface
+against every status color, not just the neutral ones. Caught by actually looking at the
+screenshot, not by reasoning about the classes in the abstract.
+
+**Verified live**, both themes, real data (not mocks): registered -> gradient-backed auth pages
+with the new logo -> upload (light, then dark) -> a real streamed chat answer in dark mode with
+the evidence panel open (real 7/7-sentence verification, real emerald "Answered" badge, indigo
+avatars/accents throughout) -> toggled back to light on the same screen to confirm both themes
+render correctly, not just whichever one was tested first. Re-ran module 7's regression checks
+against the new UI specifically because a redesign this size could plausibly have reintroduced
+exactly what that module fixed: confirmed no horizontal overflow at 390px, the mobile sidebar
+drawer still opens/closes correctly with `transition-duration` still reading `1e-05s` under
+`prefers-reduced-motion: reduce`, a real chat turn still completes cleanly under that same
+emulation, and the keyboard-focus fix for the sidebar's rename/delete buttons still holds
+(invisible until focus, visible and operable once focused) -- none of this broke silently while
+recoloring everything around it.
+
+**Not done, out of scope:** a full component-by-component dark-mode contrast audit beyond what was
+visually spot-checked above; no new dependency was added (motion, theming, and icons all came from
+packages already installed).
+
+**A real functional gap found right after, not by testing but by the user just asking "how do I log
+out":** there was no logout control anywhere in the app. Module 3's static chat placeholder had one;
+module 6 replaced that whole page with the real chat screen and never re-added it anywhere else --
+`lib/auth-context.tsx`'s `logout()` stayed fully wired and correct the entire time, just unreachable
+from any screen. Fixed by adding a footer row to `components/sidebar.tsx` (visible on every
+authenticated page): the user's display name, the theme toggle, and a logout icon button. Verified
+live: click logs out, redirects to `/login`, and a direct navigation to `/upload` afterward bounces
+straight back to `/login` -- confirming the session was actually cleared server-side (the refresh
+cookie revoked), not just a client-side redirect that left the account still logged in underneath.
+
+**A second round of user feedback on the same redesign:** the auth and upload cards looked "too
+small" for the screen -- a real layout complaint, not a color one. `app/(auth)/layout.tsx` was
+rebuilt as a two-column split (a common pattern for this: a branded indigo/amber gradient panel
+with the logo, a headline, and a 3-item feature list on one side, the actual form on the other,
+`md:hidden` collapsing to the original single-column form on mobile) instead of a small card
+floating alone on a big empty gradient. `app/(app)/upload/page.tsx`'s card widened
+(`max-w-md` -> `max-w-lg`) and gained a matching icon badge + shadow + gradient backdrop for more
+presence within the app shell (a full split-screen doesn't fit there -- the sidebar already
+occupies that role). Verified live at a real desktop width (1440px) and re-confirmed no horizontal
+overflow at 390px mobile, where the branded panel correctly disappears and the form's small logo
+takes over exactly as before.
+
+**A third round of feedback: sidebar and chat text were too small, and "make every element size
+perfect based on the screen."** Two distinct problems, not one:
+1. A pure type-scale issue -- most reading content (chat messages, sidebar session titles/meta,
+   evidence panel, source card) was sitting at Tailwind's `text-xs`/`text-sm` (12/14px). Moved every
+   one of those up one full step (`text-xs` -> `text-sm`, `text-sm` -> `text-base`) across
+   `components/sidebar.tsx`, `components/logo.tsx`, and every file in `components/chat/`, plus
+   `leading-relaxed` on message bodies. Widened the sidebar (`w-64` -> `w-72`) and its row
+   padding/icon sizes to match, rather than just enlarging text inside an unchanged-width column.
+2. **A real layout bug, the same root cause as the earlier auth-card complaint, just in a
+   different screen:** chat bubbles were capped at `max-w-lg` and left-aligned inside a
+   *full-width* flex row -- on a wide monitor this put all the content in a narrow strip on the
+   left with a huge dead zone on the right, which reads as "small" regardless of font-size.
+   `components/chat/message-list.tsx` now centers everything in a `max-w-3xl mx-auto` reading
+   column (the same pattern most chat products use), with bubbles filling up to 85% of that
+   column instead of a fixed narrow width; `app/(app)/chat/[sessionId]/page.tsx`'s header and
+   `components/chat/chat-input.tsx` were given the same centered column so the whole screen reads
+   as one consistent width, not three different ones stacked on top of each other.
+
+Verified live at a real 1440px desktop width (screenshots, not just class-name review) and
+re-confirmed mobile (390px, no overflow) and the full module 7 regression suite (reduced motion --
+sidebar `transition-duration` still `1e-05s`, unchanged -- keyboard-focus reveal on the sidebar's
+rename button, dark mode) all still pass after touching this many files a second time.
+
+**A fourth round: sidebar still not broad enough, user asked to check it against Claude.ai's own
+proportions.** Can't literally inspect Claude.ai's DOM/CSS from here, so this is calibrated from
+well-known patterns in modern AI chat UIs rather than a pixel-exact comparison -- said so directly
+rather than implying a comparison that didn't happen. Widened the sidebar again, `w-72` -> `w-80`
+(320px), and gave it noticeably more breathing room to match: header/footer padding `p-3` -> `p-4`,
+row padding `px-3 py-2.5` -> `px-3.5 py-3`, the "New chat" button bumped to the `lg` size, and every
+icon button in the sidebar/theme-toggle from `icon-sm` to the full `icon` size.
+
+**A real testing artifact hit while re-verifying, worth recording so it's recognizable next
+time:** the mobile regression re-check started failing with Playwright unable to click the
+hamburger button -- `<nextjs-portal>` (Next.js's own dev-mode toolbar, the small "N" badge) was
+sitting on top of it at that exact screen position. Confirmed by screenshot before doing anything
+about it. `force: true` didn't help (it still dispatches the click at the target's screen
+coordinates, so a real overlapping element in dev tooling can still absorb it); switched the check
+to `page.evaluate(() => button.click())`, a direct DOM call that bypasses hit-testing entirely --
+this is purely a dev-mode testing-harness quirk (the overlay doesn't exist in production), not an
+app regression, and the app's own behavior (sidebar opens to the new 320px width, everything else
+in the module 7 regression suite) checked out clean once verified correctly.
+
+**A fifth round: the login/register cards themselves, not just the page around them.** Widened the
+shared form container in `app/(auth)/layout.tsx` (`max-w-sm` -> `max-w-md`) and, in both
+`login/page.tsx` and `register/page.tsx`: bumped the `Card`'s internal padding via its own
+`--card-spacing` CSS variable (`--spacing(4)` -> `--spacing(6)`, the same variable `card.tsx`
+already uses for every one of its sub-components' padding, so this is one override, not five),
+title to `text-2xl`, every label/input/button/helper text up to `text-base`, inputs to `h-11`, and
+the submit button to the `lg` size. Verified live at 1440px (visibly larger, more substantial
+cards) and re-confirmed 390px mobile has no overflow with the wider container.
+
+**A sixth round: scrolling the chat scrolled the whole page, dragging the sidebar and the input
+bar along with it, instead of only the message list scrolling internally.** Root cause was a
+broken height-constraint chain, not the `overflow-y-auto` on `components/chat/message-list.tsx`
+itself (that was always correctly written) -- CSS's flexbox rule that a `flex-1` child only
+actually gets clipped/scrollable if *every* ancestor up the chain has a genuine bounded height (not
+just a `min-height`), and a plain column flex item needs `min-h-0` to be allowed to shrink to that
+bound instead of growing to fit its content. Two links in the chain were missing a real ceiling:
+`app/(app)/layout.tsx`'s outer shell div was only `flex-1` (grow to fill available space) with
+nothing above it in `app/layout.tsx` (`body` is deliberately `min-h-full`, unbounded, so that
+short-viewport pages like login/upload can still fall back to normal whole-page scrolling) ever
+handing it an actual ceiling to grow *into* -- fixed by giving that one div a hard `h-dvh` instead
+(dynamic viewport height, so mobile browser chrome collapsing doesn't leave a stale gap the way
+`h-screen` can). `app/(app)/chat/[sessionId]/page.tsx`'s root div was also missing `min-h-0`,
+so even with the shell now bounded, the chat page itself would still grow to fit all its messages
+rather than shrink to the space it was given -- added it. Deliberately scoped both fixes to the
+`(app)` route group instead of touching the shared root `body`, so pages that *should* still
+fall back to normal document scroll on a short viewport (auth pages, upload) are untouched.
+
+Verified with Playwright, not just re-reading the CSS: at a squeezed 1280x500 viewport with three
+real streamed answers loaded, `document.scrollingElement.scrollHeight` equals `clientHeight`
+exactly (500 === 500) and `window.scrollY` stayed `0` even after a mouse-wheel event on the page,
+while the message list's own container measured `scrollHeight` 1796 vs `clientHeight` 352 (real
+internal overflow) and its `scrollTop` could be moved independently from 1429 down to 0. Sidebar
+and chat-input bounding boxes were pixel-identical before and after scrolling the message list.
+Re-ran the full desktop (1440x900, sidebar spans the full viewport height, no page scroll),
+mobile-drawer, and reduced-motion-reload regression checks from the earlier rounds -- all still
+pass. `tsc --noEmit`, lint, and `next build` all clean.
+
+**A seventh round: the sidebar's display name was too small, and the "Add your textbook" upload
+card had never actually gotten the same enlargement pass the login/register cards got in round
+five.** `components/sidebar.tsx`'s footer name span: `text-sm text-muted-foreground` ->
+`text-base font-medium` (also dropped the muted color now that it's meant to read as a real label,
+not secondary metadata). `app/(app)/upload/page.tsx`: brought it in line with the auth cards --
+container `max-w-lg` -> `max-w-xl`, `Card`'s `--card-spacing` bumped to `--spacing(6)`, icon badge
+`size-11` -> `size-14`, title `text-xl` -> `text-2xl`, description/labels/error text all to
+`text-base`, inputs/select to `h-11`, submit and retry buttons to `size="lg"`, and the processing
+checklist rows/icons scaled up to match. Verified live: Playwright confirms the sidebar name
+renders fully untruncated (`scrollWidth === clientWidth` at 83px for "Sizing Two") -- a screenshot
+that looked like it was cut off to "g Two" turned out to be the same `<nextjs-portal>` dev-mode
+toolbar badge from the earlier finding sitting on top of the sidebar footer at that exact
+viewport position, not a real truncation bug; checked the computed style/DOM directly rather than
+trusting the screenshot.
+
+**An eighth round: "Textbook Tutor" itself needed a bigger, more stylized typeface, not just a
+size bump on the existing Inter weight.** Rather than a one-off override on the wordmark alone,
+loaded a real second display typeface -- `Fraunces` (a serif, via `next/font/google`, weights
+500/600/700) -- into `app/layout.tsx` and pointed the *already-existing* `--font-heading` CSS
+variable at it in `globals.css` (it previously just aliased back to `--font-sans`/Inter, so
+nothing anywhere actually used a distinct heading face despite the token existing since the
+redesign). Because `components/ui/card.tsx`'s `CardTitle` already applies `font-heading`, this one
+token swap also picked up every card title app-wide ("Welcome back", "Create your account", "Add
+your textbook") for free, not just the wordmark -- a deliberate reuse of the existing shared
+token rather than a special case. Bumped the wordmark text itself in both places it's hand-rolled
+(`components/logo.tsx`: `text-base` -> `text-xl`; `app/(auth)/layout.tsx`'s branded-panel copy:
+`text-lg` -> `text-2xl`), with icon badges scaled up slightly to match. Verified live: computed
+`font-family` on both wordmark instances and on a card title all resolve to `Fraunces, "Fraunces
+Fallback", Inter, ...` at the intended sizes (24px/20px), and it visually reads as a genuine
+serif-display + sans-body premium pairing rather than a font-weight trick. `tsc --noEmit`, lint,
+and `next build` all clean.
+
+**A ninth round: chat text needed to be bigger with "a perfect font style suitable for this
+project."** Rather than just resizing Inter again, loaded a third typeface scoped specifically to
+chat content: `Lexend` (a humanist sans, via `next/font/google`) -- chosen deliberately, not
+arbitrarily: Lexend was engineered and studied specifically to raise reading proficiency and
+reduce visual stress (tuned x-height/letter-spacing), which is a direct match for this product's
+actual purpose -- a Class 5 student reading grade-adapted explanations -- rather than a purely
+decorative pick. Wired it in the same way as the heading font: new `--font-reading` token in
+`globals.css` (`var(--font-lexend), var(--font-noto-bengali)`, same Bangla-script fallback reason
+as `--font-sans`), which Tailwind v4 automatically exposes as a `font-reading` utility class.
+Applied `font-reading` + bumped `text-base` (16px) -> `text-lg` (18px) on exactly the chat
+*reading* surfaces: the user bubble and assistant bubble paragraphs
+(`components/chat/message-list.tsx`, `assistant-message.tsx`), both states of the streaming
+message (`streaming-message.tsx`), and the chat input itself (`chat-input.tsx`, also bumped
+`h-9`->`h-11` and its send button `icon`->`icon-lg` so the taller text doesn't look cramped in a
+now-undersized pill). Deliberately left the status badge ("Answered"), the source card, and the
+evidence panel in the existing Inter UI font/size -- those are metadata/chrome around the message,
+not the message itself, and keeping them visually distinct from the reading content is the same
+content-vs-chrome typographic split already used for `--font-heading` vs `--font-sans` elsewhere.
+
+Verified live: computed style on both the user-question paragraph and the assistant-answer
+paragraph resolves to `Lexend, "Lexend Fallback", "Noto Sans Bengali", ...` at 18px, while the
+header's "New conversation" title (an unrelated, un-migrated element) stayed on `Inter` at 16px --
+confirms the swap is correctly scoped to chat content only, not a global regression. Re-checked
+390px mobile with a real streamed answer (`body.scrollWidth` still exactly 390, no horizontal
+overflow) and confirmed the enlarged input/button still fit the pill correctly. `tsc --noEmit`,
+lint, and `next build` all clean.
+
+**Next:** whatever the user directs -- `POST /evaluate` as a real route, or Phase 8 thesis writing.

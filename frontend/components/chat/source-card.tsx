@@ -9,13 +9,13 @@ export function SourceCard({ sources }: { sources: SourceCitation[] }) {
   if (sources.length === 0) return null;
 
   return (
-    <div className="mt-2 flex flex-col gap-1 rounded-lg bg-muted/50 p-2 text-xs text-muted-foreground">
-      <div className="flex items-center gap-1 font-medium">
-        <BookOpen className="size-3.5" />
+    <div className="mt-3 flex flex-col gap-2 rounded-xl border border-border/60 bg-card/80 p-3 text-sm text-muted-foreground">
+      <div className="flex items-center gap-1.5 font-medium text-foreground/80">
+        <BookOpen className="size-4 text-primary" />
         Referenced lessons
       </div>
       {sources.map((s) => (
-        <div key={s.lesson_id}>
+        <div key={s.lesson_id} className="rounded-md px-1.5 py-0.5">
           Unit {s.unit}, Lesson {s.lesson_no}: {s.lesson_title} (page {s.page})
         </div>
       ))}

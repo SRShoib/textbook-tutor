@@ -53,15 +53,15 @@ export default function LoginPage() {
 
   return (
     <motion.div initial="hidden" animate="visible" variants={fadeRise}>
-      <Card>
+      <Card className="[--card-spacing:--spacing(6)]">
         <CardHeader>
-          <CardTitle>Welcome back</CardTitle>
-          <CardDescription>Log in to continue with your textbook.</CardDescription>
+          <CardTitle className="text-2xl">Welcome back</CardTitle>
+          <CardDescription className="text-base">Log in to continue with your textbook.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-5">
             <div className="flex flex-col gap-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email" className="text-base">Email</Label>
               <Input
                 id="email"
                 type="email"
@@ -69,10 +69,11 @@ export default function LoginPage() {
                 required
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
+                className="h-11 text-base md:text-base"
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password" className="text-base">Password</Label>
               <Input
                 id="password"
                 type="password"
@@ -80,18 +81,19 @@ export default function LoginPage() {
                 required
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
+                className="h-11 text-base md:text-base"
               />
             </div>
             {error && (
-              <p role="alert" className="text-sm text-destructive">
+              <p role="alert" className="text-base text-destructive">
                 {error}
               </p>
             )}
-            <Button type="submit" disabled={submitting} className="w-full">
+            <Button type="submit" disabled={submitting} size="lg" className="w-full text-base">
               {submitting ? "Logging in…" : "Log in"}
             </Button>
           </form>
-          <p className="mt-4 text-center text-sm text-muted-foreground">
+          <p className="mt-5 text-center text-base text-muted-foreground">
             New here?{" "}
             <Link href="/register" className="text-primary underline underline-offset-4">
               Create an account

@@ -22,8 +22,8 @@ export const STATUS_META: Record<MessageStatus, StatusMeta> = {
   answered: {
     label: "Answered",
     icon: Check,
-    bubbleClassName: "bg-card ring-1 ring-foreground/10",
-    iconClassName: "text-muted-foreground",
+    bubbleClassName: "bg-emerald-50 ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:ring-emerald-800",
+    iconClassName: "text-emerald-600 dark:text-emerald-400",
   },
   low_confidence: {
     label: "Not fully confident",

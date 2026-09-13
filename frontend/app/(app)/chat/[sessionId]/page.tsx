@@ -95,10 +95,20 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex flex-1 flex-col">
-      <div className="border-b p-3">
-        <p className="text-sm font-medium">{session?.title ?? "New conversation"}</p>
-        <p className="text-xs text-muted-foreground">{session ? `Class ${session.grade}` : "Loading…"}</p>
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* The bar spans full width (so its border/background reaches the
+          edges), but its content is centered in the same max-w-3xl reading
+          column as the messages and input below -- otherwise the header
+          would look inconsistent with a centered body on a wide screen. */}
+      <div className="border-b bg-card/80 backdrop-blur-sm">
+        <div className="mx-auto flex w-full max-w-3xl items-center justify-between p-4">
+          <p className="text-base font-medium">{session?.title ?? "New conversation"}</p>
+          {session && (
+            <span className="rounded-full bg-secondary px-2.5 py-1 text-sm font-medium text-secondary-foreground">
+              Class {session.grade}
+            </span>
+          )}
+        </div>
       </div>
       <MessageList messages={messages} streaming={streaming} />
       <ChatInput disabled={streaming !== null} onSend={handleSend} />

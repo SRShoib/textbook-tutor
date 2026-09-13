@@ -17,7 +17,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Loader2 } from "lucide-react";
+import { BookOpen, Check, Layers, Sparkles, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,15 +25,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useAuth } from "@/lib/auth-context";
 import { apiFetch, apiUpload, ApiError } from "@/lib/api";
 import type { BookRead, SessionRead } from "@/lib/types";
-import { fadeRise, fade } from "@/lib/motion";
+import { fadeRise, fade, staggerContainer, staggerItem } from "@/lib/motion";
 
 const GRADES = Array.from({ length: 12 }, (_, i) => i + 1);
 
+// Distinct icons per conceptual step -- still all shown "in progress"
+// together while processing (see the module docstring below), just visually
+// richer than four identical spinners.
 const CHECKLIST_STEPS = [
-  "Reading your book",
-  "Splitting it into lessons",
-  "Understanding the vocabulary",
-  "Getting ready to answer questions",
+  { label: "Reading your book", icon: BookOpen },
+  { label: "Splitting it into lessons", icon: Layers },
+  { label: "Understanding the vocabulary", icon: Sparkles },
+  { label: "Getting ready to answer questions", icon: Check },
 ] as const;
 
 const POLL_INTERVAL_MS = 2000;
@@ -153,12 +156,15 @@ export default function UploadPage() {
   const isBusy = phase === "submitting" || phase === "processing" || phase === "creating_session";
 
   return (
-    <div className="flex flex-1 items-center justify-center p-6">
-      <motion.div initial="hidden" animate="visible" variants={fadeRise} className="w-full max-w-md">
-        <Card>
+    <div className="flex flex-1 items-center justify-center bg-gradient-to-br from-indigo-50 via-background to-amber-50 p-6 dark:from-indigo-950/30 dark:via-background dark:to-amber-950/10">
+      <motion.div initial="hidden" animate="visible" variants={fadeRise} className="w-full max-w-xl">
+        <Card className="[--card-spacing:--spacing(6)] shadow-lg">
           <CardHeader>
-            <CardTitle>Add your textbook</CardTitle>
-            <CardDescription>Upload the book you want to ask questions about.</CardDescription>
+            <div className="mb-2 flex size-14 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+              <BookOpen className="size-7" />
+            </div>
+            <CardTitle className="text-2xl">Add your textbook</CardTitle>
+            <CardDescription className="text-base">Upload the book you want to ask questions about.</CardDescription>
           </CardHeader>
           <CardContent>
             <AnimatePresence mode="wait">
@@ -170,21 +176,21 @@ export default function UploadPage() {
                   exit="exit"
                   variants={fade}
                   onSubmit={handleSubmit}
-                  className="flex flex-col gap-4"
+                  className="flex flex-col gap-5"
                 >
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="file">Textbook PDF</Label>
+                    <Label htmlFor="file" className="text-base">Textbook PDF</Label>
                     <input
                       id="file"
                       type="file"
                       accept="application/pdf"
                       required
                       onChange={handleFileChange}
-                      className="text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:font-medium"
+                      className="text-base file:mr-3 file:rounded-lg file:border-0 file:bg-secondary file:px-4 file:py-2 file:text-base file:font-medium"
                     />
                   </div>
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="title">Title</Label>
+                    <Label htmlFor="title" className="text-base">Title</Label>
                     <Input
                       id="title"
                       required
@@ -193,16 +199,17 @@ export default function UploadPage() {
                         setTitleTouched(true);
                         setTitle(event.target.value);
                       }}
+                      className="h-11 text-base md:text-base"
                     />
                   </div>
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="grade">Class</Label>
+                    <Label htmlFor="grade" className="text-base">Class</Label>
                     <select
                       id="grade"
                       required
                       value={grade}
                       onChange={(event) => setGrade(Number(event.target.value))}
-                      className="border-input h-9 rounded-lg border bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      className="border-input h-11 rounded-lg border bg-transparent px-3 text-base shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                     >
                       {GRADES.map((g) => (
                         <option key={g} value={g}>
@@ -212,39 +219,49 @@ export default function UploadPage() {
                     </select>
                   </div>
                   {errorMessage && (
-                    <p role="alert" className="text-sm text-destructive">
+                    <p role="alert" className="text-base text-destructive">
                       {errorMessage}
                     </p>
                   )}
-                  <Button type="submit" disabled={!file || isBusy} className="w-full">
+                  <Button type="submit" disabled={!file || isBusy} size="lg" className="w-full text-base">
                     {phase === "submitting" ? "Uploading…" : "Upload and start"}
                   </Button>
                 </motion.form>
               ) : phase === "failed" ? (
-                <motion.div key="failed" initial="hidden" animate="visible" exit="exit" variants={fade} className="flex flex-col gap-4">
-                  <p className="text-sm text-destructive">
+                <motion.div key="failed" initial="hidden" animate="visible" exit="exit" variants={fade} className="flex flex-col gap-5">
+                  <p className="text-base text-destructive">
                     Something went wrong processing this book. Please try again, or ask your teacher for a different copy.
                   </p>
-                  <Button onClick={handleRetry} variant="outline" className="w-full">
+                  <Button onClick={handleRetry} variant="outline" size="lg" className="w-full text-base">
                     Try again
                   </Button>
                 </motion.div>
               ) : (
-                <motion.div key="checklist" initial="hidden" animate="visible" exit="exit" variants={fade} className="flex flex-col gap-4">
-                  <ul className="flex flex-col gap-3">
-                    {CHECKLIST_STEPS.map((step) => (
-                      <li key={step} className="flex items-center gap-3 text-sm">
-                        {phase === "creating_session" ? (
-                          <Check className="size-4 shrink-0 text-primary" />
-                        ) : (
-                          <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
-                        )}
-                        <span className={phase === "creating_session" ? "" : "text-muted-foreground"}>{step}</span>
-                      </li>
-                    ))}
-                  </ul>
+                <motion.div key="checklist" initial="hidden" animate="visible" exit="exit" variants={fade} className="flex flex-col gap-5">
+                  <motion.ul initial="hidden" animate="visible" variants={staggerContainer} className="flex flex-col gap-4">
+                    {CHECKLIST_STEPS.map(({ label, icon: StepIcon }) => {
+                      const done = phase === "creating_session";
+                      return (
+                        <motion.li key={label} variants={staggerItem} className="flex items-center gap-3 text-base">
+                          <div
+                            className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
+                              done ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                            }`}
+                          >
+                            {done ? (
+                              <Check className="size-4.5" />
+                            ) : (
+                              <StepIcon className="size-4 animate-pulse" />
+                            )}
+                          </div>
+                          <span className={done ? "" : "text-muted-foreground"}>{label}</span>
+                          {!done && <Loader2 className="ml-auto size-4 shrink-0 animate-spin text-muted-foreground" />}
+                        </motion.li>
+                      );
+                    })}
+                  </motion.ul>
                   {showSlowNote && phase === "processing" && (
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-sm text-muted-foreground">
                       This can take a few minutes the first time a book is added.
                     </p>
                   )}

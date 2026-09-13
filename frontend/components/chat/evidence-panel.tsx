@@ -37,9 +37,9 @@ export function EvidencePanel({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        className="flex items-center gap-1 rounded-full px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
-        <ChevronDown className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+        <ChevronDown className={`size-4 transition-transform ${open ? "rotate-180" : ""}`} />
         How I checked this
       </button>
       <AnimatePresence>
@@ -49,7 +49,7 @@ export function EvidencePanel({
             animate="visible"
             exit="exit"
             variants={fade}
-            className="mt-2 flex flex-col gap-3 rounded-lg border p-3 text-xs"
+            className="mt-2 flex flex-col gap-4 rounded-xl border border-border/60 bg-card/80 p-4 text-sm"
           >
             {isTextHiddenStatus(status) && (
               <div>
@@ -65,12 +65,21 @@ export function EvidencePanel({
                   {verification.sentences.length} sentences (
                   {Math.round(verification.supported_ratio * 100)}%)
                 </p>
-                <ul className="mt-1 flex flex-col gap-0.5">
+                <ul className="mt-1 flex flex-col gap-1">
                   {verification.sentences.map((s, i) => (
-                    <li key={i} className={s.supported ? "text-foreground" : "text-destructive"}>
-                      {s.supported ? "✓" : "✗"} {s.sentence}{" "}
-                      <span className="text-muted-foreground">
-                        ({s.entailment_score.toFixed(2)})
+                    <li key={i} className="flex items-start gap-1.5">
+                      <span
+                        className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                          s.supported
+                            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300"
+                            : "bg-destructive/15 text-destructive"
+                        }`}
+                      >
+                        {s.supported ? "✓" : "✗"}
+                      </span>
+                      <span className={s.supported ? "" : "text-destructive"}>
+                        {s.sentence}{" "}
+                        <span className="text-muted-foreground">({s.entailment_score.toFixed(2)})</span>
                       </span>
                     </li>
                   ))}

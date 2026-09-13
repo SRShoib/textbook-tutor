@@ -13,8 +13,11 @@
 import { useEffect, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { Pencil, Plus, Trash2, X } from "lucide-react";
+import { LogOut, Pencil, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Logo } from "@/components/logo";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { useAuth } from "@/lib/auth-context";
 import { apiFetch, ApiError } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import type { SessionRead } from "@/lib/types";
@@ -23,6 +26,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const pathname = usePathname();
   const router = useRouter();
   const params = useParams<{ sessionId?: string }>();
+  const { user, logout } = useAuth();
 
   const [sessions, setSessions] = useState<SessionRead[]>([]);
   const [loading, setLoading] = useState(true);
@@ -113,54 +117,66 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     }
   }
 
+  async function handleLogout() {
+    await logout();
+    router.push("/login");
+  }
+
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-transform duration-200 md:relative md:translate-x-0 md:transition-none ${
+      className={`fixed inset-y-0 left-0 z-40 flex w-80 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-transform duration-200 md:relative md:translate-x-0 md:transition-none ${
         open ? "translate-x-0" : "-translate-x-full"
       }`}
     >
-      <div className="flex items-center gap-2 p-3">
-        <Button
-          render={<Link href="/upload" />}
-          nativeButton={false}
-          variant="secondary"
-          className="w-full flex-1 justify-start gap-2"
-        >
-          <Plus className="size-4" />
-          New chat
-        </Button>
+      <div className="flex items-center justify-between border-b border-sidebar-border p-4">
+        <Logo />
         {/* The hamburger button that opens this drawer sits in the layout's
             header bar above -- once open, this fixed+z-40 aside visually
             covers it (fixed elements stack above normal-flow content
             regardless of DOM order), so there's otherwise no visible way to
             close the drawer without already knowing to tap the backdrop or
             press Escape. */}
-        <Button variant="ghost" size="icon-sm" aria-label="Close menu" onClick={onClose} className="md:hidden">
-          <X className="size-4" />
+        <Button variant="ghost" size="icon" aria-label="Close menu" onClick={onClose} className="md:hidden">
+          <X className="size-5" />
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2 pb-3">
+      <div className="p-4">
+        <Button
+          render={<Link href="/upload" />}
+          nativeButton={false}
+          variant="secondary"
+          size="lg"
+          className="w-full justify-start gap-2 text-base"
+        >
+          <Plus className="size-4.5" />
+          New chat
+        </Button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-3 pb-3">
         {loading ? (
-          <p className="p-3 text-sm text-muted-foreground">Loading…</p>
+          <p className="p-3 text-base text-muted-foreground">Loading…</p>
         ) : error ? (
           <div className="flex flex-col gap-2 p-3">
-            <p className="text-sm text-destructive">{error}</p>
+            <p className="text-base text-destructive">{error}</p>
             <Button size="sm" variant="outline" onClick={() => setReloadToken((t) => t + 1)}>
               Retry
             </Button>
           </div>
         ) : sessions.length === 0 ? (
-          <p className="p-3 text-sm text-muted-foreground">No conversations yet.</p>
+          <p className="p-3 text-base text-muted-foreground">No conversations yet.</p>
         ) : (
-          <ul className="flex flex-col gap-0.5">
+          <ul className="flex flex-col gap-1">
             {sessions.map((session) => {
               const active = session.id === params.sessionId;
               return (
                 <li key={session.id}>
                   <div
-                    className={`group flex items-center gap-1 rounded-lg px-2 py-1.5 ${
-                      active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-accent/60"
+                    className={`group flex items-center gap-2 rounded-lg border-l-2 px-3.5 py-3 transition-colors ${
+                      active
+                        ? "border-l-primary bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "border-l-transparent hover:bg-sidebar-accent/60"
                     }`}
                   >
                     {editingId === session.id ? (
@@ -170,33 +186,33 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                         onChange={(event) => setEditValue(event.target.value)}
                         onBlur={() => commitRename(session.id)}
                         onKeyDown={handleEditKeyDown}
-                        className="min-w-0 flex-1 rounded border border-sidebar-ring bg-transparent px-1 text-sm outline-none"
+                        className="min-w-0 flex-1 rounded border border-sidebar-ring bg-transparent px-1 text-base outline-none"
                       />
                     ) : (
                       <Link href={`/chat/${session.id}`} className="min-w-0 flex-1">
-                        <p className="truncate text-sm">{session.title ?? "New conversation"}</p>
-                        <p className="truncate text-xs text-muted-foreground">
+                        <p className="truncate text-base">{session.title ?? "New conversation"}</p>
+                        <p className="truncate text-sm text-muted-foreground">
                           {relativeTime(session.updated_at)} · Class {session.grade}
                         </p>
                       </Link>
                     )}
                     {editingId !== session.id && (
-                      <div className="hidden shrink-0 gap-0.5 group-hover:flex group-focus-within:flex">
+                      <div className="hidden shrink-0 gap-1 group-hover:flex group-focus-within:flex">
                         <Button
-                          size="icon-sm"
+                          size="icon"
                           variant="ghost"
                           aria-label="Rename conversation"
                           onClick={() => startEditing(session)}
                         >
-                          <Pencil className="size-3.5" />
+                          <Pencil className="size-4" />
                         </Button>
                         <Button
-                          size="icon-sm"
+                          size="icon"
                           variant="ghost"
                           aria-label="Delete conversation"
                           onClick={() => handleDelete(session)}
                         >
-                          <Trash2 className="size-3.5" />
+                          <Trash2 className="size-4" />
                         </Button>
                       </div>
                     )}
@@ -206,6 +222,18 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             })}
           </ul>
         )}
+      </div>
+
+      <div className="flex items-center justify-between gap-2 border-t border-sidebar-border p-4">
+        <span className="truncate text-base font-medium" title={user?.display_name}>
+          {user?.display_name}
+        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          <ThemeToggle />
+          <Button variant="ghost" size="icon" aria-label="Log out" onClick={handleLogout}>
+            <LogOut className="size-4" />
+          </Button>
+        </div>
       </div>
     </aside>
   );

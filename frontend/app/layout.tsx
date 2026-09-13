@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
-import { Inter, Noto_Sans_Bengali } from "next/font/google";
+import { Fraunces, Inter, Lexend, Noto_Sans_Bengali } from "next/font/google";
 import { MotionConfig } from "framer-motion";
+import { ThemeProvider } from "next-themes";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/lib/auth-context";
 import "./globals.css";
@@ -19,6 +20,28 @@ const notoSansBengali = Noto_Sans_Bengali({
   subsets: ["bengali"],
 });
 
+// Display serif for the wordmark and card titles only (--font-heading in
+// globals.css) -- a deliberate contrast against Inter's body text, the
+// classic serif-display/sans-body pairing, and its warm literary character
+// fits a "textbook" brand better than another geometric sans would.
+const fraunces = Fraunces({
+  variable: "--font-fraunces",
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+});
+
+// Reading face for chat content only (--font-reading in globals.css) --
+// Lexend is a humanist sans specifically engineered (and studied) to raise
+// reading proficiency and reduce visual stress, tuned via x-height/spacing
+// rather than a purely aesthetic choice. This app's whole purpose is a
+// Class 5 student reading explanations, so the chat transcript is exactly
+// the text that benefits most; falls through to Noto Sans Bengali for the
+// same mixed-script reason as --font-sans above.
+const lexend = Lexend({
+  variable: "--font-lexend",
+  subsets: ["latin"],
+});
+
 export const metadata: Metadata = {
   title: "Textbook Tutor",
   description:
@@ -29,16 +52,22 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${notoSansBengali.variable} h-full antialiased`}
+      // suppressHydrationWarning: next-themes sets the .dark/.light class on
+      // this element from an inline script before React hydrates, which
+      // otherwise mismatches the server-rendered markup on the first paint.
+      suppressHydrationWarning
+      className={`${inter.variable} ${notoSansBengali.variable} ${fraunces.variable} ${lexend.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
         {/* reducedMotion="user" makes every Framer Motion animation in the
             app respect the OS's prefers-reduced-motion setting automatically. */}
         <MotionConfig reducedMotion="user">
-          <AuthProvider>
-            {children}
-            <Toaster />
-          </AuthProvider>
+          <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+            <AuthProvider>
+              {children}
+              <Toaster />
+            </AuthProvider>
+          </ThemeProvider>
         </MotionConfig>
       </body>
     </html>
