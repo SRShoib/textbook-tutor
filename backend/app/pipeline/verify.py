@@ -81,6 +81,30 @@ Why scaffolding sentences are excluded before scoring (Phase 6 fix, found
       the lower-level module this one already imports sentences() from, so
       moving it there (not the reverse) avoids a circular import. Imported
       back under the same name so nothing else in this file changed.
+
+Why Bangla-echo sentences are skipped, not scored, when
+      settings.bangla_mode="echo" (generate.py): cross-encoder/
+      nli-deberta-v3-base is trained on English SNLI/MultiNLI pairs and has
+      no way to score a Bangla sentence against an English book chunk —
+      handed one anyway, it would score near zero entailment regardless of
+      whether the Bangla is an accurate translation, roughly halving
+      supported_ratio and refusing correct answers (the exact Phase 6
+      failure shape, confirmed by inspection before this was built, not
+      guessed). is_bangla_sentence() (style_check.py) excludes them the same
+      way is_scaffolding_sentence() already excludes pedagogical framing —
+      into skipped_sentences, not silently dropped, so the eval JSONL and
+      the frontend evidence panel still show what the answer actually said.
+      ACCEPTED LIMITATION, not fixed here: the Bangla text itself is never
+      fact-checked. v2_stage2.txt requires each Bangla sentence to be a
+      translation of the English sentence immediately before it (which IS
+      verified), never new content — but a hallucination that appeared only
+      in the Bangla would pass unverified. The alternative (translate each
+      Bangla sentence via an LLM call, then verify the translation) adds a
+      paid call per sentence and confounds the metric with translation
+      quality; left as a documented gap for the thesis Limitations section
+      rather than solved under this change. In "light" mode (the default),
+      is_bangla_sentence() is never called — verify_answer()'s behaviour is
+      unchanged from Phase 6.
 """
 
 from __future__ import annotations
@@ -90,7 +114,7 @@ from dataclasses import dataclass, field
 
 from app.core.config import get_settings
 from app.models.chunk import Chunk
-from app.pipeline.style_check import is_scaffolding_sentence, sentences
+from app.pipeline.style_check import is_bangla_sentence, is_scaffolding_sentence, sentences
 
 _LABELS = ["contradiction", "entailment", "neutral"]
 _ENTAILMENT_INDEX = _LABELS.index("entailment")
@@ -170,11 +194,21 @@ def verify_sentences(sentence_list: list[str], chunks: list[Chunk]) -> list[Sent
     return results
 
 
+def _is_unscoreable(sentence: str, *, bangla_echo: bool) -> bool:
+    """Scaffolding is always excluded. Bangla-echo sentences are excluded
+    too, but only in echo mode — see module docstring on why the NLI model
+    cannot score them and what that costs."""
+    if is_scaffolding_sentence(sentence):
+        return True
+    return bangla_echo and is_bangla_sentence(sentence)
+
+
 async def verify_answer(answer: str, context_chunks: list[Chunk]) -> VerificationReport:
     settings = get_settings()
+    bangla_echo = settings.bangla_mode == "echo"
     all_sentences = sentences(answer)
-    skipped = [s for s in all_sentences if is_scaffolding_sentence(s)]
-    sentence_list = [s for s in all_sentences if not is_scaffolding_sentence(s)]
+    skipped = [s for s in all_sentences if _is_unscoreable(s, bangla_echo=bangla_echo)]
+    sentence_list = [s for s in all_sentences if not _is_unscoreable(s, bangla_echo=bangla_echo)]
     if not sentence_list:
         # Nothing left to check — either an empty answer (same "empty input
         # passes" shape as style_check.check_vocab_coverage) or an answer

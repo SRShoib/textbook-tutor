@@ -10,6 +10,7 @@ Alternative considered: reading os.environ directly in each module. Rejected —
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -71,6 +72,16 @@ class Settings(BaseSettings):
     style_vocab_coverage_min: float = 0.9
     history_max_messages: int = 8
     config_version: str = "v1"
+    # "light" (default) is today's measured behaviour, unchanged since Phase 6:
+    # at most one Bangla-script restatement of the student's question, answer
+    # body stays English (v1_stage2.txt). "echo" switches stage 2 to
+    # v2_stage2.txt, which asks for a Bangla-script echo after every
+    # explanation sentence — the sentence-for-sentence pattern style_guide.md
+    # section 3.4 evidences for phonics/pronunciation lessons specifically,
+    # applied here to every answer. Kept opt-in, not the new default: that
+    # evidence doesn't cover the general case, and every Phase 6 A/B/C/D
+    # number was measured under "light" — see generate.py's module docstring.
+    bangla_mode: Literal["light", "echo"] = "light"
 
     # --- caching ---
     llm_cache_dir: str = ".llm_cache"

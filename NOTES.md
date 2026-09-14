@@ -1833,3 +1833,93 @@ the form card, and the full register -> upload -> chat flow still works end to e
 lint, and `next build` all clean.
 
 **Next:** whatever the user directs -- `POST /evaluate` as a real route, or Phase 8 thesis writing.
+
+---
+
+## 2026-09-14 — bangla_mode="echo": opt-in bilingual stage 2 answers
+
+User asked whether stage 2 could answer with a Bangla-script echo after every English
+sentence (the phonics-lesson pattern style_guide.md section 3.4 evidences), not just
+the existing single question-restatement. Traced two real blockers before touching
+anything: verify.py's NLI model is English-only and would score Bangla sentences near
+zero (recreating Phase 6's original false-refusal bug at scale), and verify_node's
+retry feedback would tell stage 2 to delete the very Bangla it was asked to add.
+Planned properly (plan mode, three judgment calls put to the user with tradeoffs
+before writing code) rather than just editing the prompt.
+
+**Built:**
+- `backend/prompts/v2_stage2.txt` -- copy of v1_stage2.txt, only the Bangla note
+  rewritten: every explanation sentence gets an immediate Bangla-script echo (a
+  translation only, script only -- never romanised -- danda-terminated); greeting,
+  citation, and comprehension-check stay English-only.
+- `core/config.py`: new `bangla_mode: Literal["light", "echo"] = "light"`;
+  `.env.example` documents it. Default unchanged -- every Phase 6 A/B/C/D number
+  stays valid for any build that hasn't opted in.
+- `generate.py`: `STAGE2_ECHO_PROMPT_VERSION = "v2_stage2"` + `stage2_prompt_version()`
+  resolves which template loads, by setting; `render_stage2_prompt()`/
+  `generate_stage2()` call it instead of the hardcoded constant. Separate llm.py
+  cache namespace per prompt version, so echo mode never touches v1's ~1,500 cached
+  entries.
+- `style_check.py`: new `is_bangla_sentence()` (Bengali-script word count >= Latin
+  word count in a sentence -- a code-switched sentence that keeps a borrowed English
+  term, e.g. style_guide.md section 3.4's phonics examples, still counts as the
+  echo). `content_sentences()` gained `exclude_bangla` (default False, no-op in light
+  mode). `check_style()` excludes Bangla from all three numeric checks in echo mode
+  and, in that mode, sends the judge the Bangla-free `content` instead of the raw
+  bilingual answer -- the judge prompt says nothing about language, so it would
+  otherwise return an unpredictable verdict on mixed text.
+- `verify.py`: Bangla sentences excluded from `supported_ratio`'s denominator in
+  echo mode -- skipped and logged in the existing `skipped_sentences` field, the
+  same treatment as scaffolding, not scored and not silently dropped.
+- `eval/runner.py`: manifest now logs `bangla_mode` and the resolved stage-2 prompt
+  version, so an echo-mode run is distinguishable from a Phase 6 run in
+  `eval/runs/*.jsonl`.
+- 19 new tests across `test_style_check.py`, `test_verify.py`, `test_generate.py`.
+  260 -> 279 total (249 non-db + 30 db, both green).
+
+**Decided** (three judgment calls, presented to the user with tradeoffs before
+planning, approved as proposed):
+- Opt-in setting, default unchanged -- over making bilingual the new default and
+  re-running Phase 6's eval (real cost, a second touch of the test split) or editing
+  the prompt in place with no re-run (would silently invalidate the results chapter
+  without saying so).
+- Bangla sentences skipped and logged by the verifier, not translated-then-verified
+  -- the alternative closes the fact-checking gap below but adds a paid LLM call per
+  sentence and confounds the hallucination metric with translation quality.
+- Every explanation sentence gets an echo, not just framing and not just "core"
+  sentences -- matches the phonics-lesson pattern style_guide.md section 3.4
+  evidences, applied here beyond phonics content as a deliberate application-layer
+  scope decision (style_guide.md itself is untouched -- that finding still says what
+  it always said).
+
+**Known limitation**, recorded in verify.py's module docstring: the Bangla text is
+never fact-checked. The prompt requires each Bangla sentence to be a translation of
+the English sentence immediately before it (which IS verified), but a hallucination
+appearing only in the Bangla would pass unverified. Belongs in the thesis
+Limitations section.
+
+**Verified live**, echo mode, real ingested book (`97a7267b-...-4be4355e1a4f`, 135
+chunks), real gpt-4o-mini key, real NLI model on GPU: two questions ("What kind of
+books does Rina like to read?", "What is a noun?") both returned `status: answered`
+(not `refused_unverified`) with clean English/Bangla alternation in real Bangla
+script, no romanisation. `supported_ratio` 1.0 and 0.889 respectively, computed only
+over English sentences (3 and 9 scored); Bangla lines correctly landed in
+`skipped_sentences` (6 and 9). The one readability failure that did occur (Q2, "a
+sentence is 16 words long") was traced to a genuine 16-word English sentence ("A noun
+is a word that names an object, a place, a group, or an item.") -- confirmed Bangla
+word counts are not what tripped the cap. Confirmed `v1_stage2.txt` is byte-for-byte
+untouched (`git diff` empty) -- light mode's prompt output and existing cache entries
+are provably unaffected.
+
+**Real gap found during this same verification, not fixed here (out of scope,
+flagged for the user):** `frontend/components/chat/evidence-panel.tsx` renders
+`verification.sentences` but never renders `verification.skipped_sentences` at all.
+This predates this session -- scaffolding sentences were already invisible in the
+evidence panel -- but it now also hides every Bangla echo from the "how I checked
+this" panel with no on-screen indication anything was excluded. Worth a small
+follow-up module before demoing `bangla_mode="echo"` at the defense, since
+contribution 3's visual proof is exactly what that panel exists for.
+
+**Next:** user's call -- set `BANGLA_MODE=echo` in local `.env` when ready to demo
+bilingual answers (default stays "light" otherwise); optionally a small frontend
+module to surface `skipped_sentences` in the evidence panel.

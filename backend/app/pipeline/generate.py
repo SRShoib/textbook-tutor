@@ -33,6 +33,25 @@ Why Bangla is restricted to a single question restatement here: the style
       today, so v1_stage2.txt asks for at most one restatement, in Bangla
       script (never the transcripts' Whisper-romanised Latin spelling).
 
+Why heavier bilingual echoing is a separate opt-in prompt (v2_stage2.txt,
+      selected via settings.bangla_mode="echo") rather than a rewrite of the
+      paragraph above: making every explanation sentence carry a Bangla echo
+      is only evidenced by style_guide.md §3.4 for phonics/pronunciation
+      lessons, not the general case — promoting it to the default would
+      outrun the transcript evidence, which is exactly what the style-guide
+      process (CLAUDE.md) exists to prevent. It also isn't just a prompt
+      change: verify.py's NLI model is English-only and cannot score a
+      Bangla sentence, so echo-mode Bangla sentences are skipped from
+      verification and logged, never fact-checked (an accepted limitation —
+      see verify.py's module docstring); style_check.py's numeric checks
+      must exclude them the same way scaffolding is already excluded, or a
+      long Bangla echo would trip the 14-word sentence cap the "light"
+      numbers were measured against. stage2_prompt_version() resolves which
+      template loads; the two prompt files sit in separate llm.py cache
+      namespaces, so flipping BANGLA_MODE never touches the other mode's
+      cached calls, and every Phase 6 A/B/C/D result — measured under the
+      untouched "light" default — stays reproducible.
+
 Why load_style_rules() can drop section 3.1 (opening move) per call: §3.1
       documents how a teacher opens a whole LESSON — greeting, then
       (usually) a song, then naming the unit/lesson/page — once, at the
@@ -77,6 +96,7 @@ from app.pipeline.llm import LLMResult, call_llm
 
 STAGE1_PROMPT_VERSION = "v1_stage1"
 STAGE2_PROMPT_VERSION = "v1_stage2"
+STAGE2_ECHO_PROMPT_VERSION = "v2_stage2"
 PLAIN_LLM_PROMPT_VERSION = "v1_plain_llm"
 
 # backend/app/pipeline/generate.py -> parents[2] is backend/, where
@@ -145,6 +165,18 @@ def generate_plain_llm(question: str, *, provider: str = "openai") -> PlainLLMRe
 
 
 # --- stage 2: grade-voice rewrite --------------------------------------
+
+
+def stage2_prompt_version() -> str:
+    """Which stage-2 template to load, per settings.bangla_mode. "light"
+    (default) resolves to STAGE2_PROMPT_VERSION — byte-identical to every
+    prompt used for the Phase 6 A/B/C/D results, so those numbers stay valid
+    for any build that hasn't opted in. "echo" resolves to
+    STAGE2_ECHO_PROMPT_VERSION (v2_stage2.txt); see the module docstring for
+    why this is a separate file rather than a rewrite of v1's Bangla note."""
+    settings = get_settings()
+    return STAGE2_ECHO_PROMPT_VERSION if settings.bangla_mode == "echo" else STAGE2_PROMPT_VERSION
+
 
 _TOP_SECTION_RE = re.compile(r"^## (\d+)\..*$", re.MULTILINE)
 _BULLET_RE = re.compile(r"^\s*-\s")
@@ -338,7 +370,7 @@ def render_stage2_prompt(
     feedback: str | None = None,
     source_citation: str = _DEFAULT_SOURCE_CITATION,
 ) -> str:
-    template = load_prompt(STAGE2_PROMPT_VERSION)
+    template = load_prompt(stage2_prompt_version())
     grade_profile = load_grade_profile(grade)
     if not grade_profile:
         grade_profile = (
@@ -392,5 +424,5 @@ def generate_stage2(
         feedback=feedback,
         source_citation=source_citation,
     )
-    result = call_llm(prompt, prompt_version=STAGE2_PROMPT_VERSION, provider=provider)
+    result = call_llm(prompt, prompt_version=stage2_prompt_version(), provider=provider)
     return Stage2Result(answer=result.text, llm=result)

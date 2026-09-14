@@ -51,6 +51,7 @@ def restore_verify_settings():
     original = {
         "verify_entailment_threshold": settings.verify_entailment_threshold,
         "verify_supported_ratio": settings.verify_supported_ratio,
+        "bangla_mode": settings.bangla_mode,
     }
     yield
     for k, v in original.items():
@@ -299,3 +300,48 @@ async def test_verify_answer_all_scaffolding_passes_trivially(monkeypatch):
     assert report.passed is True
     assert report.sentences == []
     assert len(report.skipped_sentences) == 2
+
+
+# --- bangla_mode="echo": Bangla sentences skipped, not scored ------------
+
+
+@pytest.mark.asyncio
+async def test_verify_answer_echo_mode_skips_bangla_sentences(monkeypatch):
+    # English-only NLI model can't score a Bangla sentence -- it must be
+    # excluded from supported_ratio the same way scaffolding is, not scored
+    # (and near-certainly fail) against an English book chunk.
+    chunk = make_chunk("u2-s1", "A noun is a naming word.")
+    fake = FakeCrossEncoder({(chunk.text, "A noun is a naming word."): 0.95})
+    monkeypatch.setattr(verify, "get_nli_model", lambda: fake)
+    get_settings().verify_entailment_threshold = 0.5
+    get_settings().verify_supported_ratio = 0.8
+    get_settings().bangla_mode = "echo"
+
+    answer = "A noun is a naming word. একটি বিশেষ্য হলো নামের শব্দ।"
+    report = await verify.verify_answer(answer, [chunk])
+
+    assert report.passed is True
+    assert report.supported_ratio == pytest.approx(1.0)
+    assert [s.sentence for s in report.sentences] == ["A noun is a naming word."]
+    assert report.skipped_sentences == ["একটি বিশেষ্য হলো নামের শব্দ।"]
+
+
+@pytest.mark.asyncio
+async def test_verify_answer_light_mode_still_scores_bangla_sentences(monkeypatch):
+    # Default behaviour must stay exactly what Phase 6 measured: Bangla is
+    # not given special treatment unless bangla_mode="echo" is set.
+    chunk = make_chunk("u2-s1", "A noun is a naming word.")
+    fake = FakeCrossEncoder({(chunk.text, "A noun is a naming word."): 0.95})
+    monkeypatch.setattr(verify, "get_nli_model", lambda: fake)
+    get_settings().verify_entailment_threshold = 0.5
+    get_settings().verify_supported_ratio = 0.8
+    get_settings().bangla_mode = "light"
+
+    answer = "A noun is a naming word. একটি বিশেষ্য হলো নামের শব্দ।"
+    report = await verify.verify_answer(answer, [chunk])
+
+    assert [s.sentence for s in report.sentences] == [
+        "A noun is a naming word.",
+        "একটি বিশেষ্য হলো নামের শব্দ।",
+    ]
+    assert report.skipped_sentences == []

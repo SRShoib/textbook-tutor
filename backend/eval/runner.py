@@ -46,7 +46,7 @@ from app.core.db import AsyncSessionLocal
 from app.models.book import Book
 from app.models.message import Message, MessageRole
 from app.models.session import Session
-from app.pipeline.generate import STAGE1_PROMPT_VERSION, STAGE2_PROMPT_VERSION
+from app.pipeline.generate import STAGE1_PROMPT_VERSION, stage2_prompt_version
 from app.pipeline.graph import run_pipeline
 from app.pipeline.llm import get_stats, reset_stats
 from app.pipeline.rewrite import REWRITE_PROMPT_VERSION
@@ -205,9 +205,13 @@ async def run_eval(
         "provider": provider,
         "model": settings.openai_model if provider == "openai" else settings.ollama_model,
         "embedding_model": settings.embedding_model,
+        # bangla_mode logged alongside prompt_versions.stage2 (the resolved
+        # template, not always STAGE2_PROMPT_VERSION) so an echo-mode run is
+        # distinguishable from a Phase 6 run in eval/runs/*.jsonl.
+        "bangla_mode": settings.bangla_mode,
         "prompt_versions": {
             "stage1": STAGE1_PROMPT_VERSION,
-            "stage2": STAGE2_PROMPT_VERSION,
+            "stage2": stage2_prompt_version(),
             "rewrite": REWRITE_PROMPT_VERSION,
             "style_judge": STYLE_JUDGE_PROMPT_VERSION,
         },

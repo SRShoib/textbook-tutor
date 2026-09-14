@@ -2,11 +2,22 @@
 monkeypatched-LLM test for generate_stage1 itself (no real network call).
 CLAUDE.md: test pipeline/ functions, skip route tests."""
 
+import re
+
 import pytest
 
+from app.core.config import get_settings
 from app.models.chunk import Chunk, ChunkType
 from app.pipeline import generate
 from app.pipeline.llm import LLMResult
+
+
+@pytest.fixture(autouse=True)
+def restore_bangla_mode():
+    settings = get_settings()
+    original = settings.bangla_mode
+    yield
+    settings.bangla_mode = original
 
 
 def make_chunk(text: str) -> Chunk:
@@ -131,6 +142,39 @@ def test_load_prompt_v1_stage2_has_grade_variable():
     assert "{stage1_answer}" in template
     assert "{style_rules}" in template
     assert "{fewshot}" in template
+
+
+# --- bangla_mode="echo": stage2_prompt_version() + v2_stage2.txt ---------
+
+
+def test_stage2_prompt_version_default_is_light():
+    get_settings().bangla_mode = "light"
+    assert generate.stage2_prompt_version() == generate.STAGE2_PROMPT_VERSION
+
+
+def test_stage2_prompt_version_echo():
+    get_settings().bangla_mode = "echo"
+    assert generate.stage2_prompt_version() == generate.STAGE2_ECHO_PROMPT_VERSION
+
+
+def test_v2_stage2_has_the_same_placeholders_as_v1():
+    # Same call signature either way -- render_stage2_prompt() must not need
+    # to know which template it loaded.
+    v1_placeholders = set(re.findall(r"\{(\w+)\}", generate.load_prompt(generate.STAGE2_PROMPT_VERSION)))
+    v2_placeholders = set(re.findall(r"\{(\w+)\}", generate.load_prompt(generate.STAGE2_ECHO_PROMPT_VERSION)))
+    assert v1_placeholders == v2_placeholders
+
+
+def test_render_stage2_prompt_light_mode_keeps_single_restatement_note():
+    prompt = generate.render_stage2_prompt("What is a noun?", "A noun is a naming word.", grade=5)
+    assert "restate the student's question once" in prompt
+
+
+def test_render_stage2_prompt_echo_mode_asks_for_a_bangla_echo_per_sentence():
+    get_settings().bangla_mode = "echo"
+    prompt = generate.render_stage2_prompt("What is a noun?", "A noun is a naming word.", grade=5)
+    assert "after every sentence of your explanation" in prompt
+    assert "Bangla script only" in prompt
 
 
 def test_load_style_rules_drops_evidence_quotes_but_keeps_rules():
@@ -353,6 +397,26 @@ def test_generate_stage2_returns_answer_and_llm_metadata(monkeypatch):
     assert captured["prompt_version"] == generate.STAGE2_PROMPT_VERSION
     assert "What is a noun?" in captured["prompt"]
     assert "A noun is a naming word." in captured["prompt"]
+
+
+def test_generate_stage2_echo_mode_uses_the_echo_prompt_version(monkeypatch):
+    captured = {}
+
+    def fake_call_llm(prompt, *, prompt_version, provider="openai", **kwargs):
+        captured["prompt"] = prompt
+        captured["prompt_version"] = prompt_version
+        return LLMResult(
+            text="answer", model="gpt-test", provider=provider,
+            prompt_version=prompt_version, cached=False, prompt_tokens=1, completion_tokens=1,
+        )
+
+    monkeypatch.setattr(generate, "call_llm", fake_call_llm)
+    get_settings().bangla_mode = "echo"
+
+    generate.generate_stage2("What is a noun?", "A noun is a naming word.", grade=5)
+
+    assert captured["prompt_version"] == generate.STAGE2_ECHO_PROMPT_VERSION
+    assert "after every sentence of your explanation" in captured["prompt"]
 
 
 def test_generate_stage2_passes_through_is_first_turn(monkeypatch):

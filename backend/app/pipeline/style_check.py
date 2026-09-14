@@ -39,6 +39,23 @@ Why vocabulary coverage is checked against chunks.text plus the five real
       answers' vocabulary keeps the check aligned with the same voice
       stage 2 is asked to imitate.
 
+Why is_bangla_sentence() exists (added alongside settings.bangla_mode="echo"
+      in generate.py): in that mode, v2_stage2.txt asks stage 2 to follow
+      every English explanation sentence with a Bangla-script echo of the
+      same meaning. Those echoes are counted by _WORD_RE today (it already
+      matches the Bengali block), so left alone they would inflate
+      check_sentence_length's word count and could trip the grade's
+      sentence-length cap on a sentence that isn't even English — the same
+      class of problem is_scaffolding_sentence() was built to solve, for a
+      different kind of "wrapping text that isn't the actual explanation."
+      Excluded via content_sentences(exclude_bangla=True) when
+      bangla_mode="echo"; unused (default False) in "light" mode, so nothing
+      here changes for the Phase 6-measured default. Threshold is "at least
+      as many Bengali-script words as Latin-script words," not "no Latin at
+      all" — real code-switched teaching keeps English terms inside a Bangla
+      sentence (style_guide.md §3.4's phonics examples do exactly this), and
+      that should still count as the Bangla echo, not as English content.
+
 Why is_scaffolding_sentence()/content_sentences() live here, not just in
       verify.py (Phase 6 fix, 2026-09-13, found via dev-split error
       analysis): verify.py originally excluded pedagogical scaffolding
@@ -146,12 +163,32 @@ def is_scaffolding_sentence(sentence: str) -> bool:
     return any(pattern.search(sentence) for pattern in _SCAFFOLDING_PATTERNS)
 
 
-def content_sentences(text: str) -> list[str]:
+def is_bangla_sentence(sentence: str) -> bool:
+    """True for a Bangla-script echo sentence (settings.bangla_mode="echo" —
+    see module docstring). A sentence counts as Bangla when it has at least
+    one Bengali-script word and at least as many Bengali as Latin words, so
+    a code-switched sentence that keeps an English term is still counted as
+    the echo, not as English content."""
+    all_words = words(sentence)
+    bangla_words = sum(1 for w in all_words if _BANGLA_RE.search(w))
+    if bangla_words == 0:
+        return False
+    return bangla_words >= len(all_words) - bangla_words
+
+
+def content_sentences(text: str, *, exclude_bangla: bool = False) -> list[str]:
     """sentences(text) with scaffolding sentences dropped — what
     check_sentence_length/check_vocab_coverage/check_fk_grade should score,
     since a child's reading burden is set by the explanation, not by the
-    fixed greeting/citation/repeat-marker text wrapped around it."""
-    return [s for s in sentences(text) if not is_scaffolding_sentence(s)]
+    fixed greeting/citation/repeat-marker text wrapped around it.
+
+    exclude_bangla=True (settings.bangla_mode="echo") also drops Bangla-echo
+    sentences — see is_bangla_sentence()'s docstring. False (default) is a
+    no-op, so "light" mode's behaviour is unchanged."""
+    result = [s for s in sentences(text) if not is_scaffolding_sentence(s)]
+    if exclude_bangla:
+        result = [s for s in result if not is_bangla_sentence(s)]
+    return result
 
 
 # --- individual checks ---------------------------------------------------
@@ -290,12 +327,16 @@ async def check_style(
 ) -> StyleReport:
     settings = get_settings()
     failures: list[str] = []
+    bangla_echo = settings.bangla_mode == "echo"
 
     # Scored on the explanation only — scaffolding (greeting, citation,
     # repeat marker, comprehension check) dropped first. See module
     # docstring: a wordy question-echo sentence isn't a grade-adaptation
-    # failure, it's fixed template text.
-    content = " ".join(content_sentences(answer))
+    # failure, it's fixed template text. In echo mode, the Bangla-script
+    # echo sentences are dropped too (is_bangla_sentence) — they restate the
+    # English sentence right before them, not independent content, and
+    # would otherwise inflate the word count these checks measure.
+    content = " ".join(content_sentences(answer, exclude_bangla=bangla_echo))
 
     max_words, mean_words = check_sentence_length(content)
     if max_words > settings.style_max_sentence_words:
@@ -325,7 +366,14 @@ async def check_style(
     judge_reason: str | None = None
     if not failures:
         judge_ran = True
-        verdict = await asyncio.to_thread(run_judge, answer, grade=grade, provider=provider)
+        # In echo mode, judge the English explanation (content), not the
+        # raw bilingual answer — the judge prompt says nothing about
+        # language, so a Bangla-mixed answer would get an unpredictable
+        # verdict. Scoring `content` keeps the judge measuring the same
+        # explanation text the numeric checks above already measured,
+        # consistent with what it scored under "light" mode in Phase 6.
+        judge_text = content if bangla_echo else answer
+        verdict = await asyncio.to_thread(run_judge, judge_text, grade=grade, provider=provider)
         judge_suitable = verdict.suitable
         judge_reason = verdict.reason
         if not verdict.suitable:

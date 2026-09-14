@@ -27,6 +27,7 @@ def restore_style_settings():
         "style_fk_max": settings.style_fk_max,
         "style_vocab_coverage_min": settings.style_vocab_coverage_min,
         "openai_judge_model": settings.openai_judge_model,
+        "bangla_mode": settings.bangla_mode,
     }
     yield
     for k, v in original.items():
@@ -104,6 +105,46 @@ def test_content_sentences_drops_scaffolding_keeps_the_fact():
         "Do you understand?"
     )
     assert style_check.content_sentences(answer) == ["The capital city of Indonesia is Jakarta."]
+
+
+# --- is_bangla_sentence / content_sentences(exclude_bangla=...) (echo mode) -
+
+
+def test_is_bangla_sentence_true_for_pure_bangla():
+    assert style_check.is_bangla_sentence("একটি বিশেষ্য হলো নামের শব্দ।") is True
+
+
+def test_is_bangla_sentence_true_for_code_switched_english_term():
+    # Real teaching pattern (style_guide.md §3.4): an English term kept
+    # inside an otherwise-Bangla sentence still counts as the Bangla echo.
+    assert style_check.is_bangla_sentence("একটি noun হলো নামের শব্দ।") is True
+
+
+def test_is_bangla_sentence_false_for_english_sentence():
+    assert style_check.is_bangla_sentence("A noun is a naming word.") is False
+
+
+def test_is_bangla_sentence_false_when_latin_words_outnumber_bangla():
+    assert style_check.is_bangla_sentence("A noun is রকম a naming word in English.") is False
+
+
+def test_is_bangla_sentence_false_for_empty_string():
+    assert style_check.is_bangla_sentence("") is False
+
+
+def test_content_sentences_keeps_bangla_by_default():
+    answer = "A noun is a naming word. একটি বিশেষ্য হলো নামের শব্দ।"
+    assert style_check.content_sentences(answer) == [
+        "A noun is a naming word.",
+        "একটি বিশেষ্য হলো নামের শব্দ।",
+    ]
+
+
+def test_content_sentences_drops_bangla_when_excluded():
+    answer = "A noun is a naming word. একটি বিশেষ্য হলো নামের শব্দ।"
+    assert style_check.content_sentences(answer, exclude_bangla=True) == [
+        "A noun is a naming word.",
+    ]
 
 
 # --- check_sentence_length ------------------------------------------------
@@ -382,6 +423,96 @@ async def test_check_style_judge_rejection_fails_the_report(monkeypatch):
     assert report.passed is False
     assert report.judge_suitable is False
     assert "too formal for a child" in report.failures[0]
+
+
+@pytest.mark.asyncio
+async def test_check_style_echo_mode_excludes_bangla_from_sentence_length(monkeypatch):
+    # The Bangla echo restates the same fact far more verbosely than the
+    # 14-word cap allows -- it must not be what check_sentence_length
+    # measures, or a correct, appropriately-sized English explanation would
+    # fail the check because of its own translation.
+    async def fake_book_vocabulary(book_id, grade):
+        return FIXED_VOCAB
+
+    def fake_run_judge(answer, *, grade, provider="openai"):
+        return style_check._JudgeVerdict(suitable=True, reason="clear")
+
+    monkeypatch.setattr(style_check, "book_vocabulary", fake_book_vocabulary)
+    monkeypatch.setattr(style_check, "run_judge", fake_run_judge)
+    get_settings().bangla_mode = "echo"
+    get_settings().style_max_sentence_words = 14
+
+    answer = (
+        "A noun is a naming word. "
+        "একটি বিশেষ্য হলো এমন একটি শব্দ যা কোনো ব্যক্তি, স্থান বা বস্তুর নাম বোঝায় এবং বাক্যে ব্যবহার করা হয়।"
+    )
+    report = await style_check.check_style(answer, grade=5, book_id=uuid.uuid4())
+
+    assert report.max_sentence_words == 6  # "A noun is a naming word." only
+    assert report.passed is True
+
+
+@pytest.mark.asyncio
+async def test_check_style_light_mode_still_counts_bangla_words(monkeypatch):
+    # Default behaviour must stay exactly what Phase 6 measured: no
+    # exclusion happens unless bangla_mode="echo" is set.
+    async def fake_book_vocabulary(book_id, grade):
+        return FIXED_VOCAB
+
+    monkeypatch.setattr(style_check, "book_vocabulary", fake_book_vocabulary)
+    get_settings().bangla_mode = "light"
+    get_settings().style_max_sentence_words = 14
+
+    answer = (
+        "A noun is a naming word. "
+        "একটি বিশেষ্য হলো এমন একটি শব্দ যা কোনো ব্যক্তি, স্থান বা বস্তুর নাম বোঝায় এবং বাক্যে ব্যবহার করা হয়।"
+    )
+    report = await style_check.check_style(answer, grade=5, book_id=uuid.uuid4())
+
+    assert report.max_sentence_words > 14  # the long Bangla sentence sets it
+    assert report.passed is False
+
+
+@pytest.mark.asyncio
+async def test_check_style_echo_mode_judge_receives_bangla_free_content(monkeypatch):
+    captured = {}
+
+    async def fake_book_vocabulary(book_id, grade):
+        return FIXED_VOCAB
+
+    def fake_run_judge(answer, *, grade, provider="openai"):
+        captured["answer"] = answer
+        return style_check._JudgeVerdict(suitable=True, reason="clear")
+
+    monkeypatch.setattr(style_check, "book_vocabulary", fake_book_vocabulary)
+    monkeypatch.setattr(style_check, "run_judge", fake_run_judge)
+    get_settings().bangla_mode = "echo"
+
+    answer = "A noun is a naming word. একটি বিশেষ্য হলো নামের শব্দ।"
+    await style_check.check_style(answer, grade=5, book_id=uuid.uuid4())
+
+    assert captured["answer"] == "A noun is a naming word."
+
+
+@pytest.mark.asyncio
+async def test_check_style_light_mode_judge_receives_full_answer(monkeypatch):
+    captured = {}
+
+    async def fake_book_vocabulary(book_id, grade):
+        return FIXED_VOCAB
+
+    def fake_run_judge(answer, *, grade, provider="openai"):
+        captured["answer"] = answer
+        return style_check._JudgeVerdict(suitable=True, reason="clear")
+
+    monkeypatch.setattr(style_check, "book_vocabulary", fake_book_vocabulary)
+    monkeypatch.setattr(style_check, "run_judge", fake_run_judge)
+    get_settings().bangla_mode = "light"
+
+    answer = "A noun is a naming word. It names a person, place, or thing."
+    await style_check.check_style(answer, grade=5, book_id=uuid.uuid4())
+
+    assert captured["answer"] == answer
 
 
 @pytest.mark.asyncio
