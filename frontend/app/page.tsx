@@ -9,7 +9,7 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    if (status === "authed") router.replace("/new");
+    if (status === "authed") router.replace("/chat/new");
     if (status === "anon") router.replace("/login");
   }, [status, router]);
 

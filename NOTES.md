@@ -2185,3 +2185,174 @@ verification passes; several `run-verify-*` throwaway accounts and one stray
 the dev DB -- all harmless, none of it real thesis data, safe to leave or
 clean up via `docker compose down -v` + a fresh `alembic upgrade head` if a
 clean slate is wanted before recording real results.
+
+## 2026-09-15 — admin dashboard visual redesign follow-up
+
+User asked for the admin dashboard (module 3) to look more "industry grade" --
+modern, premium, animated -- rather than the plain flat version. Loaded the
+`dataviz` skill first (its stat-tile/KPI-row/dashboard-color guidance applies
+even without a literal chart), then stayed inside the app's existing
+Indigo/Amber tokens (`globals.css`) rather than inventing a new palette --
+status colors (ready/processing/failed) are unchanged from `chat/status-
+meta.ts`'s emerald/amber/destructive set, per the skill's "status colors are
+reserved, never color alone" rule.
+
+**Built** (`app/(app)/admin/page.tsx` only): a 3-tile KPI row (Textbooks /
+Ready / Needs attention, the last one turning neutral gray instead of amber
+when it's zero); a two-column layout (fixed upload panel + book table)
+replacing the single stacked column; a drag-and-drop upload zone replacing
+the plain file input; Fraunces heading + small-caps "ADMIN" eyebrow label,
+matching the serif/sans pairing already established elsewhere; staggered
+tile entrance, hover-reveal delete button (mirrors the sidebar's existing
+hover-action pattern instead of an always-visible icon), fade-out on delete.
+
+**Two real bugs found and fixed during verification, not shipped blind:**
+1. First pass capped content at `max-w-6xl` and centered it -- fine on a
+   laptop, but the user's own screenshot (a wide monitor) showed large dead
+   margins left/right and below. Fixed by widening to `max-w-[1800px]` and
+   increasing padding/component sizing (bigger stat tiles, bigger card
+   spacing, `text-base` table) so real content actually fills a wide viewport
+   instead of an arbitrarily narrow column.
+2. The first fix at the table level used `table-fixed` + a `<colgroup>` with
+   hardcoded pixel widths for the non-title columns. That fit at 1920px but
+   not at 1440px (a common laptop width) -- the Title column's remaining
+   width went negative, collapsing it and visually colliding the "TITLE" and
+   "CLASS" header text into each other. Verified live at both widths (not
+   just the one screenshot that looked fine), caught it, and replaced it with
+   plain `table-layout: auto` + `whitespace-nowrap` on the narrow columns --
+   columns size from content and can't go negative; Title just wraps
+   gracefully on a long entry instead of the two failure modes above.
+
+**Verified, for real, twice** (before and after the width fix): `npm run
+build` clean each time; live Playwright screenshots at 1920px, 1440px,
+dark mode, row-hover, and 400px mobile, against the real dev DB. Backend
+`pytest` unaffected both times (294 passed, same 2 pre-existing failures) --
+this is a frontend-only visual change.
+
+**Next:** none of the five modules or this follow-up are committed yet --
+same state as noted above, all still sitting together in the working tree.
+
+## 2026-09-15 — bug fix: "New chat" created a new session on every click
+
+User-reported bug: module 4's `/new` page called `POST /sessions`
+unconditionally on mount, so every visit -- "New chat," landing on `/`,
+registering, logging in, even the admin-redirect bounce -- created a real
+session row immediately. Click "New chat" a few times without ever typing a
+question and the sidebar fills up with empty "New conversation" rows,
+forever. User asked for ChatGPT/Claude-style behavior: nothing gets created
+until you actually send something; clicking "New chat" again before that
+just returns you to the same not-yet-real draft.
+
+**Fix:** moved session creation out of a dedicated page entirely and into
+`handleSend` on the chat screen itself, at the moment a message is actually
+sent. `app/(app)/chat/[sessionId]/page.tsx`'s existing `[sessionId]` route
+already renders correctly for an empty session, so the literal string "new"
+just became a valid value for it meaning "no session yet" -- no new route
+needed. `POST /sessions` now happens exactly once, exactly when the first
+message fires; on success the URL is swapped from `/chat/new` to the real id
+via `router.replace(..., { scroll: false })`, no reload. Deleted
+`app/(app)/new/page.tsx` outright and repointed every place that used to
+send someone there (`sidebar.tsx` x2, `app/page.tsx`,
+`login`/`register`/`admin/layout.tsx`) to `/chat/new`.
+
+**Real race condition caught and fixed, not shipped on faith:** promoting
+the URL re-triggers the history-loading effect (it's keyed on `sessionId`,
+which just changed) -- and at that exact instant the first message may not
+be saved server-side yet, so a naive re-fetch would have overwritten the
+in-progress optimistic/streaming state with an empty history. Fixed with a
+`justCreatedRef` flag set right before the replace and consumed by the
+effect on its next run -- same shape as module 4's `startedRef` guard,
+different race. Also added: the header now previews the signed-in user's
+own `grade` as the class badge while no session exists yet, instead of
+hiding it.
+
+**Judgment call from the plan, approved as proposed:** dropped the old
+`/new` page's proactive "no book yet" pre-flight check. A missing/not-ready
+book now only surfaces as a `toast.error` if and when the user tries to
+send something -- the only option that doesn't reintroduce an unconditional
+`POST /sessions` on page load, which is the exact bug being fixed.
+
+**One thing the plan got wrong, caught by testing rather than assumed
+correct:** the plan said a failed send would leave the typed text in the
+input to retry. It doesn't -- `ChatInput.submit()` already clears its input
+synchronously right after calling `onSend`, before that promise resolves
+either way, and this predates this fix (every other `streamMessage` error
+path in this app has always cleared the input the same way). Not treated as
+a bug: it matches how the app already behaves everywhere else, and the
+toast still says exactly what went wrong.
+
+**Verified, for real, against the live backend (not mocked):** `npm run
+build` clean, `/new` gone from the route table. Live Playwright + real
+`GET /sessions` counts through the whole flow: 0 sessions after register,
+still 0 after clicking "New chat" three times with nothing typed, exactly 1
+after actually sending "What is a noun?" (real pipeline, real GPU
+NLI/retrieval, cached LLM call from earlier sessions), URL promoted from
+`/chat/new` to a real id with no reload, a hard page reload rendered the
+same exchange from history, a second "New chat" click stayed at 1 session
+(fresh draft, nothing created yet), and the first chat's exchange was still
+intact afterward -- the race guard held. Separately: a grade-12 account (no
+book) landed on the draft with a live "Class 12" preview badge, sent a
+message, got a clean `toast.error("No textbook has been added for your
+class yet.")`, and `GET /sessions` stayed at 0 the whole time. Backend
+`pytest`: 294 passed, same 2 pre-existing failures, unchanged -- no backend
+file touched.
+
+**Next:** still nothing committed. Everything from the five admin-owned-
+books modules plus this fix and the dashboard redesign sits together in the
+working tree, same as noted above.
+
+## 2026-09-15 — follow-up bug: first answer in a new chat vanished until reload
+
+User reported the above fix wasn't quite right: asking the first question in
+a new chat, the question *and* the answer would render and then disappear --
+reappearing correctly only after a manual reload. Not caught by the previous
+session's own verification, which checked message counts and post-reload
+state but never checked the live DOM immediately after sending, before any
+reload -- exactly the gap that hid this.
+
+**Diagnosis, done by instrumenting real network traces rather than guessing:**
+`router.replace()`, called right after creating the session (the previous
+design), promotes the `[sessionId]` route segment from `"new"` to the real
+id -- and this was found to actually **remount** `ChatPage`, not just
+re-render it with new params. A fresh mount means fresh state and fresh
+`useRef`s; the in-flight `handleSend` call (still running in the old,
+now-unmounted instance) becomes a zombie whose later `setMessages`/
+`setStreaming` calls are no-ops, while the new instance's own history fetch
+can catch the session before the message finishes saving -- rendering
+empty, with nothing to ever trigger a second fetch.
+
+Two guard attempts before landing on the real fix, each disproven by a live
+network trace rather than assumed correct:
+1. A one-shot "skip the next effect run" ref -- survived exactly one
+   redundant re-run, then let a second one through (observed: two full
+   history-fetch pairs in the network log, the second one clobbering state
+   with data from before the message saved).
+2. An idempotent "already handled this id" ref, checked by equality instead
+   of consumed -- fixed the double-fetch, but broke differently: the ref
+   write (before starting the fetch) persists across React Strict Mode's
+   dev-only double-invoke of the effect, so the *second* (kept) invocation
+   saw it already set and skipped entirely, while the *first* invocation's
+   own fetch had its result discarded by the standard `cancelled`-flag
+   cleanup. Net effect: zero applied fetches, still empty.
+
+**Actual fix:** stop trying to make component state survive a transition
+that turns out to remount the component. `handleSend` now calls
+`router.replace()` only *after* `streamMessage()` resolves -- i.e., after
+the full exchange (both messages) is already durably saved server-side (the
+streaming endpoint only sends its "done" event once the answer is
+committed). The history-fetch effect itself went back to exactly its
+original, unmodified shape -- no guard at all. Even if the route change
+still remounts the page, a fresh instance's fetch now always lands on
+already-complete data, so there's nothing left to race.
+
+**Verified, for real, closing the actual gap in the previous verification:**
+re-ran the same real-pipeline send (real GPU retrieval/NLI, real bilingual
+echo-mode answer) and this time checked the live DOM immediately after
+sending, with no reload -- full question, full answer (both English and
+Bangla lines), sources, and the evidence panel all present, screenshot
+attached to the conversation. Re-ran the full session-count regression from
+the previous entry unchanged (0 -> 0 -> 1 -> still 1) and the no-book error
+path -- both still clean. Backend `pytest`: 294 passed, same 2 pre-existing
+failures, unchanged -- no backend file touched.
+
+**Next:** still nothing committed.

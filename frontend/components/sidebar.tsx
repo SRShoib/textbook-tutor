@@ -6,8 +6,10 @@
  * active-session highlighting -- Phase 7 module 4.
  * Why it refetches on every route change (usePathname in the effect deps)
  * instead of sharing state some other way: it's one cheap GET, and it means
- * a session created by /new just shows up the moment you land on /chat/{id},
- * with no cross-page state plumbing needed.
+ * a session created from the /chat/new draft (see that page's docstring for
+ * why "new" never touches the database until the first message is sent)
+ * just shows up the moment its URL is promoted to a real id, with no
+ * cross-page state plumbing needed.
  */
 
 import { useEffect, useState, type KeyboardEvent } from "react";
@@ -110,7 +112,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       await apiFetch<void>(`/sessions/${session.id}`, { method: "DELETE" });
       setSessions((prev) => prev.filter((s) => s.id !== session.id));
       if (params.sessionId === session.id) {
-        router.push("/new");
+        router.push("/chat/new");
       }
     } catch (err) {
       window.alert(err instanceof ApiError ? err.message : "Could not delete this conversation.");
@@ -143,7 +145,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 
       <div className="flex flex-col gap-2 p-4">
         <Button
-          render={<Link href="/new" />}
+          render={<Link href="/chat/new" />}
           nativeButton={false}
           variant="secondary"
           size="lg"
