@@ -30,6 +30,15 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8)
+
+
 class UserUpdate(BaseModel):
     """PATCH /auth/me -- profile edit (2026-09-15 decision, module 2): both
     fields optional so a partial update (just grade, say) is a no-op on the

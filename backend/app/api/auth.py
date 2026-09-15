@@ -1,13 +1,15 @@
 """
-What: POST /register, /login, /refresh, /logout and GET /me. Together these
-      turn the placeholder ALLOW_ANONYMOUS-only auth in core/auth.py into
-      real login, while leaving that dev-user path in place for local
-      dev/eval runs (CLAUDE.md: ALLOW_ANONYMOUS is for "local dev and the
-      eval runner only").
+What: POST /register, /login, /refresh, /logout, /forgot-password,
+      /reset-password, and GET/PATCH /me. Together these turn the
+      placeholder ALLOW_ANONYMOUS-only auth in core/auth.py into real login,
+      while leaving that dev-user path in place for local dev/eval runs
+      (CLAUDE.md: ALLOW_ANONYMOUS is for "local dev and the eval runner
+      only").
 
-Why login returns identical errors for "no such email" and "wrong
-      password": returning a different error for each would let this
-      endpoint be used to discover which children have accounts.
+Why login (and forgot-password) return identical responses for "no such
+      email" and "wrong password" / "no such account": returning a
+      different one for each would let either endpoint be used to discover
+      which children have accounts.
 
 Why refresh tokens rotate (old one revoked, new one issued) on every use,
       and a *reused* refresh token revokes the whole family: without
@@ -17,6 +19,11 @@ Why refresh tokens rotate (old one revoked, new one issued) on every use,
       that this token was copied out from under its owner, so every other
       active token for that user is revoked too rather than only the one
       being replayed.
+
+Why forgot-password doesn't send real email by default: see
+      core/email.py's module docstring -- this project has no email service
+      configured on purpose, and the "console" backend (default) prints the
+      reset link instead so the whole flow is testable with no credentials.
 """
 
 from __future__ import annotations
@@ -30,21 +37,33 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.core.email import send_password_reset_email
 from app.core.errors import AppError
 from app.core.rate_limit import clear as rate_limit_clear
 from app.core.rate_limit import is_blocked as rate_limit_is_blocked
 from app.core.rate_limit import record_failure as rate_limit_record_failure
 from app.core.security import (
     create_access_token,
+    create_password_reset_token,
     create_refresh_token,
     decode_token,
     hash_password,
+    hash_password_reset_token,
     hash_refresh_token,
     verify_password,
 )
+from app.models.password_reset_token import PasswordResetToken
 from app.models.refresh_token import RefreshToken
 from app.models.user import User, UserRole
-from app.schemas.user import LoginRequest, RegisterRequest, TokenResponse, UserRead, UserUpdate
+from app.schemas.user import (
+    ForgotPasswordRequest,
+    LoginRequest,
+    RegisterRequest,
+    ResetPasswordRequest,
+    TokenResponse,
+    UserRead,
+    UserUpdate,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -192,6 +211,78 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
             await db.commit()
 
     _clear_refresh_cookie(response)
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    body: ForgotPasswordRequest, request: Request, db: AsyncSession = Depends(get_db)
+) -> dict[str, str]:
+    """Always returns the same generic message whether or not the email
+    has an account -- same anti-enumeration principle as /login above.
+    Rate-limited in its own key namespace ("reset:...") so this endpoint
+    can't be used to spam a real owner's inbox with reset links, separate
+    from /login's own attempt counter."""
+    settings = get_settings()
+    client_ip = request.client.host if request.client else "unknown"
+    rate_key = f"reset:{body.email.lower()}:{client_ip}"
+    now = datetime.now(timezone.utc)
+
+    if rate_limit_is_blocked(
+        rate_key,
+        limit=settings.login_rate_limit_attempts,
+        window_seconds=settings.login_rate_limit_window_seconds,
+        now=now,
+    ):
+        raise AppError("RATE_LIMITED", "Too many requests. Try again later.", status_code=429)
+    # Every request counts here, not just failed ones (unlike /login) --
+    # there is no "success" outcome an attacker could distinguish, so every
+    # attempt from this email+IP pair counts toward the limit.
+    rate_limit_record_failure(rate_key, window_seconds=settings.login_rate_limit_window_seconds, now=now)
+
+    user = await db.scalar(select(User).where(User.email == body.email))
+    if user is not None and user.is_active:
+        token, token_hash, expires_at = create_password_reset_token(user.id)
+        db.add(PasswordResetToken(user_id=user.id, token_hash=token_hash, expires_at=expires_at))
+        await db.commit()
+        reset_link = f"{settings.frontend_origin}/reset-password?token={token}"
+        send_password_reset_email(user.email, reset_link)
+
+    return {"message": "If that email has an account, we've sent a link to reset the password."}
+
+
+@router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_db)) -> None:
+    payload = decode_token(body.token, expected_type="password_reset")
+    token_hash = hash_password_reset_token(body.token)
+    row = await db.scalar(select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash))
+
+    if row is None:
+        raise AppError("TOKEN_INVALID", "This reset link is not valid.", status_code=401)
+    if row.used_at is not None:
+        raise AppError("TOKEN_INVALID", "This reset link has already been used.", status_code=401)
+
+    now = datetime.now(timezone.utc)
+    if row.expires_at <= now:
+        raise AppError("TOKEN_EXPIRED", "This reset link has expired.", status_code=401)
+
+    user = await db.get(User, payload.user_id)
+    if user is None or not user.is_active:
+        raise AppError("TOKEN_INVALID", "This reset link is not valid.", status_code=401)
+
+    user.password_hash = hash_password(body.new_password)
+    row.used_at = now
+
+    # Changing your password should end every other signed-in session --
+    # same reasoning /refresh's reuse-detection branch above already applies.
+    active_refresh_tokens = (
+        await db.scalars(
+            select(RefreshToken).where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+        )
+    ).all()
+    for token_row in active_refresh_tokens:
+        token_row.revoked_at = now
+
+    await db.commit()
 
 
 @router.get("/me", response_model=UserRead)

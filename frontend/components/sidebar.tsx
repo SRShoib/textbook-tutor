@@ -239,7 +239,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       </div>
 
       <div className="flex items-center justify-between gap-2 border-t border-sidebar-border p-4">
-        <span className="truncate text-base font-medium" title={user?.display_name}>
+        <span className="truncate text-lg font-semibold" title={user?.display_name}>
           {user?.display_name}
         </span>
         <div className="flex shrink-0 items-center gap-1">

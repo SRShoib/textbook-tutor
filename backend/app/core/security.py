@@ -102,10 +102,42 @@ def create_refresh_token(user_id: uuid.UUID) -> tuple[str, str, datetime]:
     return token, token_hash, expires_at
 
 
+def create_password_reset_token(user_id: uuid.UUID) -> tuple[str, str, datetime]:
+    """Returns (token, token_hash, expires_at) -- same shape and same
+    reasoning as create_refresh_token(): the caller stores token_hash in
+    password_reset_tokens and emails the raw token, never persisting it.
+    Needs its own jti (like create_refresh_token's) for the same reason:
+    JWT iat/exp encode to whole-second Unix timestamps, so two tokens for
+    the same user issued in the same second would otherwise be byte-for-
+    byte identical and collide on token_hash's unique constraint -- caught
+    live by a test that requested three in a tight loop."""
+    _check_secret_configured()
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=settings.password_reset_token_minutes)
+    payload = {
+        "sub": str(user_id),
+        "type": "password_reset",
+        "jti": str(uuid.uuid4()),
+        "iat": now,
+        "exp": expires_at,
+    }
+    token = jwt.encode(payload, settings.jwt_secret, algorithm=ALGORITHM)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return token, token_hash, expires_at
+
+
 def hash_refresh_token(token: str) -> str:
     """Same digest create_refresh_token() used, exposed separately so
     api/auth.py can look up a *presented* token by hash without re-deriving
     it from decode_token()'s payload."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def hash_password_reset_token(token: str) -> str:
+    """Same digest as hash_refresh_token() -- kept as its own function
+    rather than reused so a reader sees which token type each call site is
+    actually looking up, not just "some token"."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 

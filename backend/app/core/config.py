@@ -97,6 +97,23 @@ class Settings(BaseSettings):
     login_rate_limit_window_seconds: int = 300
     allow_anonymous: bool = True
 
+    # --- password reset ---
+    # Short-lived on purpose -- a reset link is a sensitive one-time action,
+    # not something that should stay usable as long as an access token.
+    password_reset_token_minutes: int = 30
+    # "console" (default) prints the reset link instead of emailing it --
+    # this project has no email-sending infrastructure and no third-party
+    # email service is wired in on purpose (children's email addresses,
+    # minimal-data stance). "smtp" sends a real email via stdlib smtplib
+    # once real SMTP settings below are filled in. See core/email.py.
+    email_backend: Literal["console", "smtp"] = "console"
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from_email: str = "no-reply@textbook-tutor.local"
+    smtp_use_tls: bool = True
+
     # --- frontend (Phase 7) ---
     # The Next.js dev origin allowed to send credentialed (cookie-bearing)
     # requests. Must be an explicit origin, never "*" -- CORSMiddleware

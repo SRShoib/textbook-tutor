@@ -166,6 +166,7 @@ def test_v2_stage2_has_the_same_placeholders_as_v1():
 
 
 def test_render_stage2_prompt_light_mode_keeps_single_restatement_note():
+    get_settings().bangla_mode = "light"
     prompt = generate.render_stage2_prompt("What is a noun?", "A noun is a naming word.", grade=5)
     assert "restate the student's question once" in prompt
 
@@ -388,6 +389,7 @@ def test_generate_stage2_returns_answer_and_llm_metadata(monkeypatch):
         )
 
     monkeypatch.setattr(generate, "call_llm", fake_call_llm)
+    get_settings().bangla_mode = "light"
 
     result = generate.generate_stage2(
         "What is a noun?", "A noun is a naming word.", grade=5

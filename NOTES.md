@@ -2356,3 +2356,132 @@ path -- both still clean. Backend `pytest`: 294 passed, same 2 pre-existing
 failures, unchanged -- no backend file touched.
 
 **Next:** still nothing committed.
+
+## 2026-09-15 — project audit: two housekeeping fixes, one item explicitly declined
+
+User asked "what's left in this project" — a full audit against CLAUDE.md's
+build order and every "not fixed"/"flagged for the user"/"known limitation"
+note across this file, cross-checked against the actual current code rather
+than taken on faith. Most flagged items turned out already resolved by later
+modules (`GET /books`, session resuming, the mobile sidebar collapse, the
+`.env.local.example` gitignore exclusion) or are deliberate thesis-writing
+material, not code (Bangla text never fact-checked, the NLI truncation
+limit, the `hallucination_rate` methodology question). Three were real and
+actionable; user asked for two of them fixed now, one explicitly not:
+
+**1. Fixed: the two `test_generate.py` failures carried through every module
+this entire session, reported each time as "pre-existing, unrelated" but
+never actually root-caused until now.** Not a code bug -- `generate.py`'s
+actual default behavior is correct. The real cause: this machine's `.env`
+has `BANGLA_MODE=echo` (set during the Sept 14 bilingual demo and never
+reverted), and two tests never explicitly select `bangla_mode = "light"`
+before asserting light-mode behavior, so they silently inherit whatever the
+environment has instead of what they're actually trying to test --
+`test_render_stage2_prompt_light_mode_keeps_single_restatement_note` and
+`test_generate_stage2_returns_answer_and_llm_metadata`. (A third test that
+looked suspicious at first glance, `test_generate_stage2_echo_mode_uses_the_
+echo_prompt_version`, was checked directly and is correctly written --
+initial pattern-matching across grep hits wrongly implied it was part of
+the same problem before actually reading it in place.) Fix: each of the two
+real offenders now sets `get_settings().bangla_mode = "light"` explicitly
+before calling into `generate.py`, so they no longer depend on whatever
+`.env` happens to have. Full suite: **296 passed, 0 failed** -- clean for
+the first time this session.
+
+**2. Fixed: `requirements.txt` pins vs. what's actually installed had
+drifted** on about half the pinned packages (`fastapi`, `uvicorn`,
+`python-multipart`, `pydantic-settings`, `sqlalchemy`, `asyncpg`, `alembic`,
+`pgvector`, `pymupdf`, `FlagEmbedding`, `torch`, `pytest`, `pytest-asyncio`)
+-- likely accumulated gradually since Phase 1, each `pip install` picking up
+newer compatible releases the file was never re-pinned against. Reassuring
+finding first: every package that actually shapes research *results*
+(`openai`, `langgraph`, `numpy`, `ragas`, `langchain-core`, `textstat`,
+`sentence-transformers`) was still exactly at its original pin -- the drift
+was entirely in framework/plumbing and test-tooling packages, not anything
+that could have silently changed a reported eval number.
+
+Two ways to reconcile, and this one was decided rather than asked, since it
+wasn't close: freeze `requirements.txt` to match what's installed now, or
+reinstall the original older pins. Reinstalling was the clearly worse
+option -- the Phase 6 eval numbers already happened; downgrading now
+can't retroactively change what produced them, and re-pulling a different
+`torch` build on this specific GPU setup (CUDA 12.4) risked destabilizing
+it for zero benefit. Went with freezing: updated every pin to its actual
+installed version (a surgical version-number-only edit, same file
+structure/comments preserved) and fixed the CUDA install comment, which
+still said `cu121` though the real installed build is `cu124`.
+
+**3. Explicitly declined by the user, not built: password reset.** Flagged
+in the audit as technically implied by CLAUDE.md ("Password reset can wait
+for Phase 7" -- Phase 7 is done, it was never added), but the user said no
+one asked for it and it's not needed for the defense. Left as a known,
+intentional gap -- not a bug, not forgotten, a decision.
+
+**Verified:** full backend `pytest` after both fixes -- 296 passed, 0
+failed. `requirements.txt` cross-checked pin-by-pin against `pip list`
+output -- every line now matches exactly what's installed.
+
+**Next:** still nothing committed -- this sits on top of the redesign +
+bug-fix work from earlier today, all still in the working tree together.
+
+## 2026-09-15 — password reset (reversed an earlier decision)
+
+Earlier today the user explicitly said not to build password reset. Later
+in the same session they reversed that and asked for it. Built as its own
+planned module (CLAUDE.md's rhythm), not folded into the audit fixes above.
+
+**Built:**
+- `password_reset_tokens` table (`alembic/versions/0003_...py`, mirrors
+  `refresh_tokens`' shape exactly: `id`, `user_id`, `token_hash` (unique),
+  `expires_at`, `used_at`, `created_at`) + matching model.
+- `core/config.py`: `email_backend: "console" | "smtp"` (default
+  `"console"`), plus `smtp_*` settings and `password_reset_token_minutes=30`.
+- `core/email.py` (new): one function, `send_password_reset_email()`.
+  **Judgment call, not asked as a question because it wasn't close:** this
+  project has no email infrastructure and none is being added -- a real
+  third-party email service would mean new credentials, a new dependency,
+  and sending children's email addresses to yet another third party, for a
+  thesis prototype. `"console"` (default) prints the reset link to the
+  server log instead of emailing it -- the entire real flow is testable
+  with zero credentials, which is exactly what verification below did.
+  `"smtp"` sends for real via stdlib `smtplib`, no new dependency, if a real
+  inbox is ever needed. Same "one seam" shape as `pipeline/llm.py`.
+- `core/security.py`: `create_password_reset_token()` + `hash_password_
+  reset_token()`, mirroring `create_refresh_token()`/`hash_refresh_token()`.
+- `api/auth.py`: `POST /forgot-password` (identical response whether or not
+  the email exists -- same anti-enumeration principle already documented
+  for `/login`; rate-limited in its own `reset:` key namespace, separate
+  from login's counter) and `POST /reset-password` (validates the token,
+  sets the new password, and revokes every existing refresh token for that
+  user -- changing your password ends every other signed-in session, same
+  posture as `/refresh`'s reuse-detection branch).
+- Frontend: `app/(auth)/forgot-password/page.tsx` and `.../reset-password/
+  page.tsx` (new), a "Forgot password?" link added to `login/page.tsx`.
+
+**Real bug caught by the tests, not shipped on faith:** `create_password_
+reset_token()` initially had no `jti` claim, unlike `create_refresh_token()`
+it was supposed to mirror exactly. JWT `iat`/`exp` encode to whole-second
+Unix timestamps, so a test that requested three reset tokens for the same
+user in a tight loop produced three byte-for-byte identical tokens --
+`IntegrityError` on `password_reset_tokens`' unique `token_hash` constraint.
+Fixed by adding the missing `jti`, exactly like the function it was meant
+to mirror already has.
+
+**Verified, for real:** `alembic upgrade head` applied clean. Full backend
+`pytest`: **302 passed**, 0 failed (296 + 6 new tests: identical response
+for known/unknown email, rate limiting, valid reset changes the password,
+a used token can't be reused, a garbage token is rejected, reset revokes
+existing refresh tokens). `npm run build` clean, both new routes in the
+table. Live browser, `email_backend` left at its real default
+(`"console"`): registered an account, logged out, requested a reset,
+**pulled the real link straight out of the backend's own terminal output**
+(no shortcuts, no mocking at this layer), opened it, set a new password --
+old password then correctly rejected at login, new password correctly
+works, and revisiting the exact same link a second time correctly says
+"already been used." Screenshots of both new pages attached to the
+conversation. Backend dev server was found running stale code from before
+today's several rounds of changes (started without `--reload` a while
+back) -- restarted it with `--reload` so this stops being a recurring
+manual step.
+
+**Next:** still nothing committed.
