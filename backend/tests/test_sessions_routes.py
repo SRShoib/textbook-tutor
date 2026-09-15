@@ -1,9 +1,9 @@
 """Route tests for the sessions CRUD + title generation added in this
 module (api/sessions.py) — a documented exception to CLAUDE.md's "skip
 route tests unless asked" rule, same as test_auth_routes.py: ownership
-scoping, soft-delete, and the auto-title/updated_at side effects on
-create_message() are exactly the kind of behavior a pipeline-level unit
-test can't reach.
+scoping, soft-delete, grade-based book resolution (2026-09-15 decision),
+and the auto-title/updated_at side effects on create_message() are exactly
+the kind of behavior a pipeline-level unit test can't reach.
 
 Needs docker-compose's Postgres running and migrated (`alembic upgrade
 head`) — every test here is marked "db"; `pytest -m "not db"` skips this
@@ -11,9 +11,14 @@ file entirely."""
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
+from sqlalchemy import select
 
 from app.models.book import Book, BookStatus
+from app.models.session import Session
+from app.models.user import User
 from app.pipeline.graph import PipelineResult
 from app.models.message import MessageStatus
 
@@ -29,8 +34,12 @@ async def _register(client, email: str, grade: int = 5) -> str:
     return resp.json()["access_token"]
 
 
-async def _make_book(db_session, *, file_hash: str, grade: int = 5) -> Book:
-    book = Book(title="Test Book", grade=grade, status=BookStatus.READY, chunk_count=1, file_hash=file_hash)
+async def _make_book(
+    db_session, *, file_hash: str, grade: int = 5, status: BookStatus = BookStatus.READY, created_at=None
+) -> Book:
+    book = Book(title="Test Book", grade=grade, status=status, chunk_count=1, file_hash=file_hash)
+    if created_at is not None:
+        book.created_at = created_at
     db_session.add(book)
     await db_session.commit()
     await db_session.refresh(book)
@@ -95,13 +104,63 @@ def _mock_title(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_session_uses_book_matching_caller_grade(client, db_session):
+    token = await _register(client, "grade-match@example.com", grade=8)
+    grade5_book = await _make_book(db_session, file_hash="hash-grade-5")
+    grade8_book = await _make_book(db_session, file_hash="hash-grade-8", grade=8)
+
+    resp = await client.post("/api/v1/sessions", headers=_auth(token))
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["book_id"] == str(grade8_book.id)
+    assert body["book_id"] != str(grade5_book.id)
+    assert body["grade"] == 8
+
+
+@pytest.mark.asyncio
+async def test_create_session_no_book_for_grade_404(client):
+    # Grade 11 is never given a book anywhere in this suite, so no ready
+    # book can exist for it inside this test's own (rolled-back) transaction.
+    token = await _register(client, "no-book@example.com", grade=11)
+    resp = await client.post("/api/v1/sessions", headers=_auth(token))
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "NO_BOOK_FOR_GRADE"
+
+
+@pytest.mark.asyncio
+async def test_create_session_book_not_ready_409(client, db_session):
+    token = await _register(client, "not-ready@example.com", grade=9)
+    await _make_book(db_session, file_hash="hash-not-ready", grade=9, status=BookStatus.PROCESSING)
+
+    resp = await client.post("/api/v1/sessions", headers=_auth(token))
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "BOOK_NOT_READY"
+
+
+@pytest.mark.asyncio
+async def test_create_session_newest_ready_book_wins(client, db_session):
+    # Postgres's now() is constant within one transaction, so two books
+    # inserted back-to-back in the same test get identical created_at --
+    # set it explicitly to make "newest wins" unambiguous.
+    token = await _register(client, "newest-wins@example.com", grade=10)
+    older = datetime.now(timezone.utc) - timedelta(days=1)
+    newer = datetime.now(timezone.utc)
+    await _make_book(db_session, file_hash="hash-older", grade=10, created_at=older)
+    replacement = await _make_book(db_session, file_hash="hash-newer", grade=10, created_at=newer)
+
+    resp = await client.post("/api/v1/sessions", headers=_auth(token))
+    assert resp.status_code == 201
+    assert resp.json()["book_id"] == str(replacement.id)
+
+
+@pytest.mark.asyncio
 async def test_list_sessions_scoped_to_caller(client, db_session):
     token_a = await _register(client, "list-a@example.com")
     token_b = await _register(client, "list-b@example.com")
-    book = await _make_book(db_session, file_hash="hash-list")
+    await _make_book(db_session, file_hash="hash-list")
 
-    await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token_a))
-    await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token_b))
+    await client.post("/api/v1/sessions", headers=_auth(token_a))
+    await client.post("/api/v1/sessions", headers=_auth(token_b))
 
     resp_a = await client.get("/api/v1/sessions", headers=_auth(token_a))
     assert resp_a.status_code == 200
@@ -115,10 +174,10 @@ async def test_list_sessions_scoped_to_caller(client, db_session):
 @pytest.mark.asyncio
 async def test_list_sessions_orders_by_most_recently_active(client, db_session, _mock_title):
     token = await _register(client, "order@example.com")
-    book = await _make_book(db_session, file_hash="hash-order")
+    await _make_book(db_session, file_hash="hash-order")
 
-    first = await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token))
-    second = await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token))
+    first = await client.post("/api/v1/sessions", headers=_auth(token))
+    second = await client.post("/api/v1/sessions", headers=_auth(token))
     first_id, second_id = first.json()["id"], second.json()["id"]
 
     # Send a message to the *first* (older) session -- it should now sort
@@ -134,9 +193,9 @@ async def test_list_sessions_orders_by_most_recently_active(client, db_session, 
 async def test_get_session_not_owned_returns_404(client, db_session):
     token_a = await _register(client, "own-a@example.com")
     token_b = await _register(client, "own-b@example.com")
-    book = await _make_book(db_session, file_hash="hash-own")
+    await _make_book(db_session, file_hash="hash-own")
 
-    created = await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token_a))
+    created = await client.post("/api/v1/sessions", headers=_auth(token_a))
     session_id = created.json()["id"]
 
     resp = await client.get(f"/api/v1/sessions/{session_id}", headers=_auth(token_b))
@@ -148,9 +207,9 @@ async def test_get_session_not_owned_returns_404(client, db_session):
 async def test_get_session_messages_scoped_and_ordered(client, db_session, _mock_title):
     token_a = await _register(client, "hist-a@example.com")
     token_b = await _register(client, "hist-b@example.com")
-    book = await _make_book(db_session, file_hash="hash-hist")
+    await _make_book(db_session, file_hash="hash-hist")
 
-    created = await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token_a))
+    created = await client.post("/api/v1/sessions", headers=_auth(token_a))
     session_id = created.json()["id"]
 
     await client.post(f"/api/v1/sessions/{session_id}/messages", json={"content": "What is a noun?"}, headers=_auth(token_a))
@@ -170,9 +229,9 @@ async def test_get_session_messages_scoped_and_ordered(client, db_session, _mock
 async def test_rename_session(client, db_session):
     token_a = await _register(client, "rename-a@example.com")
     token_b = await _register(client, "rename-b@example.com")
-    book = await _make_book(db_session, file_hash="hash-rename")
+    await _make_book(db_session, file_hash="hash-rename")
 
-    created = await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token_a))
+    created = await client.post("/api/v1/sessions", headers=_auth(token_a))
     session_id = created.json()["id"]
 
     resp = await client.patch(f"/api/v1/sessions/{session_id}", json={"title": "My renamed chat"}, headers=_auth(token_a))
@@ -189,9 +248,9 @@ async def test_rename_session(client, db_session):
 @pytest.mark.asyncio
 async def test_delete_session_then_idempotent_404(client, db_session):
     token = await _register(client, "delete@example.com")
-    book = await _make_book(db_session, file_hash="hash-delete")
+    await _make_book(db_session, file_hash="hash-delete")
 
-    created = await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token))
+    created = await client.post("/api/v1/sessions", headers=_auth(token))
     session_id = created.json()["id"]
 
     delete = await client.delete(f"/api/v1/sessions/{session_id}", headers=_auth(token))
@@ -210,9 +269,9 @@ async def test_delete_session_then_idempotent_404(client, db_session):
 @pytest.mark.asyncio
 async def test_auto_title_set_once_and_not_overwritten(client, db_session, _mock_title):
     token = await _register(client, "title@example.com")
-    book = await _make_book(db_session, file_hash="hash-title")
+    await _make_book(db_session, file_hash="hash-title")
 
-    created = await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token))
+    created = await client.post("/api/v1/sessions", headers=_auth(token))
     session_id = created.json()["id"]
     assert created.json()["title"] is None
 
@@ -235,9 +294,9 @@ async def test_auto_title_set_once_and_not_overwritten(client, db_session, _mock
 @pytest.mark.asyncio
 async def test_updated_at_bumps_on_each_message(client, db_session, _mock_title):
     token = await _register(client, "bump@example.com")
-    book = await _make_book(db_session, file_hash="hash-bump")
+    await _make_book(db_session, file_hash="hash-bump")
 
-    created = await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token))
+    created = await client.post("/api/v1/sessions", headers=_auth(token))
     session_id = created.json()["id"]
     created_updated_at = created.json()["updated_at"]
 
@@ -270,26 +329,37 @@ async def test_stream_endpoint_requires_ownership_and_ready_book(client, db_sess
     token_a = await _register(client, "stream-a@example.com")
     token_b = await _register(client, "stream-b@example.com")
     ready_book = await _make_book(db_session, file_hash="hash-stream-ready")
-    processing_book = Book(
-        title="Still Processing", grade=5, status=BookStatus.PROCESSING, chunk_count=0, file_hash="hash-stream-proc"
-    )
-    db_session.add(processing_book)
-    await db_session.commit()
+    user_a = await db_session.scalar(select(User).where(User.email == "stream-a@example.com"))
 
-    created = await client.post("/api/v1/sessions", json={"book_id": str(ready_book.id)}, headers=_auth(token_a))
-    session_id = created.json()["id"]
+    session = Session(user_id=user_a.id, book_id=ready_book.id, grade=5)
+    db_session.add(session)
+    await db_session.commit()
+    await db_session.refresh(session)
+    session_id = str(session.id)
 
     forbidden = await client.post(
         f"/api/v1/sessions/{session_id}/messages/stream", json={"content": "hi"}, headers=_auth(token_b)
     )
     assert forbidden.status_code == 404
 
-    not_ready_session = await client.post(
-        "/api/v1/sessions", json={"book_id": str(processing_book.id)}, headers=_auth(token_a)
+    # A session whose book isn't ready still blocks new messages --
+    # constructed directly on the Session row since POST /sessions can no
+    # longer create a session pointed at a not-ready book itself (the book
+    # is chosen automatically from ready books only, see api/sessions.py's
+    # _find_book_for_grade).
+    processing_book = Book(
+        title="Still Processing", grade=5, status=BookStatus.PROCESSING, chunk_count=0, file_hash="hash-stream-proc"
     )
-    not_ready_id = not_ready_session.json()["id"]
+    db_session.add(processing_book)
+    await db_session.commit()
+    await db_session.refresh(processing_book)
+    not_ready_session = Session(user_id=user_a.id, book_id=processing_book.id, grade=5)
+    db_session.add(not_ready_session)
+    await db_session.commit()
+    await db_session.refresh(not_ready_session)
+
     not_ready_resp = await client.post(
-        f"/api/v1/sessions/{not_ready_id}/messages/stream", json={"content": "hi"}, headers=_auth(token_a)
+        f"/api/v1/sessions/{not_ready_session.id}/messages/stream", json={"content": "hi"}, headers=_auth(token_a)
     )
     assert not_ready_resp.status_code == 409
 
@@ -297,9 +367,9 @@ async def test_stream_endpoint_requires_ownership_and_ready_book(client, db_sess
 @pytest.mark.asyncio
 async def test_stream_endpoint_emits_events_in_order_and_persists_the_message(client, db_session, _mock_title):
     token = await _register(client, "stream-order@example.com")
-    book = await _make_book(db_session, file_hash="hash-stream-order")
+    await _make_book(db_session, file_hash="hash-stream-order")
 
-    created = await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token))
+    created = await client.post("/api/v1/sessions", headers=_auth(token))
     session_id = created.json()["id"]
 
     async with client.stream(
@@ -341,8 +411,8 @@ async def test_stream_endpoint_emits_events_in_order_and_persists_the_message(cl
 @pytest.mark.asyncio
 async def test_stream_endpoint_emits_error_event_on_pipeline_failure(client, db_session, monkeypatch):
     token = await _register(client, "stream-error@example.com")
-    book = await _make_book(db_session, file_hash="hash-stream-error")
-    created = await client.post("/api/v1/sessions", json={"book_id": str(book.id)}, headers=_auth(token))
+    await _make_book(db_session, file_hash="hash-stream-error")
+    created = await client.post("/api/v1/sessions", headers=_auth(token))
     session_id = created.json()["id"]
 
     async def failing_run_pipeline_stream(question, grade, book_id, **kwargs):

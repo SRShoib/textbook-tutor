@@ -1923,3 +1923,265 @@ contribution 3's visual proof is exactly what that panel exists for.
 **Next:** user's call -- set `BANGLA_MODE=echo` in local `.env` when ready to demo
 bilingual answers (default stays "light" otherwise); optionally a small frontend
 module to surface `skipped_sentences` in the evidence panel.
+
+## 2026-09-15 — admin-owned books, module 1: backend book ownership + grade-based sessions
+
+User wants books to stop being something a student uploads per chat: an admin
+uploads a book once (permanent, until an admin deletes it), and a student's class
+comes from their account, chosen at registration and changed later via profile
+edit, not picked per chat. First of five modules -- this one is backend only. Two
+judgment calls (newest-ready-book-wins over an "active" flag; blocking delete
+while any session references a book) were put to the user with tradeoffs before
+planning; both were approved as the recommended option. Planned in plan mode
+after an Explore pass confirmed the eval runner writes `Session`/`Message` rows
+directly and never calls these routes (CLAUDE.md's "API and eval runner share
+pipeline code" rule was never at risk), and that the FKs on `chunks.book_id` /
+`sessions.book_id` have no `ON DELETE` rule, so a hard delete needed to be gated
+by hand.
+
+**Built:**
+- `core/auth.py`: new `require_admin` dependency -- 403 `FORBIDDEN` unless
+  `user.role == UserRole.ADMIN`. Reads the role off the freshly-fetched `User` row,
+  not the JWT claim, so `make_admin.py` takes effect on that account's very next
+  request. This is the first place `role` is enforced anywhere in the backend --
+  it existed on the model since Phase 5 but nothing ever checked it.
+- `api/books.py`: `POST` now requires `require_admin` (was: any authenticated
+  user). New `GET ""` (admin, newest first, for the dashboard table) and new
+  `DELETE /{book_id}` (admin): 404 if missing, 409 `BOOK_HAS_SESSIONS` if any
+  session -- soft-deleted included, since that row still holds the FK -- points at
+  it, else deletes `chunks` then the book row then unlinks the PDF off disk.
+  `GET /{book_id}` unchanged (any authenticated user).
+- `api/sessions.py`: `create_session` takes no request body. New
+  `_find_book_for_grade()`: newest `ready` book matching `user.grade`, else 409
+  `BOOK_NOT_READY` if a book exists for that grade but isn't ready, else 404
+  `NO_BOOK_FOR_GRADE`. `schemas/session.py`'s `SessionCreate` deleted outright --
+  both its fields were client input that no longer exists.
+- `scripts/make_admin.py` (new `backend/scripts/` dir): `python -m
+  scripts.make_admin <email>` flips an existing account to admin. Registration
+  still always creates a student, on purpose -- this is the only bootstrap path.
+- Test rewrites: `test_books_routes.py` gained a `_register_admin()` helper
+  (register, then flip role on the db row) and 8 new tests (403s for a student on
+  POST/GET/DELETE, admin list, delete-removes-chunks, delete-blocked by a live
+  session, delete-blocked by a *soft-deleted* session, delete-404). Every
+  `POST /sessions` call site in `test_sessions_routes.py` dropped its `book_id`
+  body; 4 new tests cover grade-matching, no-book-404, not-ready-409, and
+  newest-wins (had to set `created_at` explicitly -- Postgres's `now()` is
+  constant within one transaction, so two books inserted in the same test
+  otherwise tie). The stream test that used to point a session at a
+  still-processing book via `POST /sessions` now constructs that `Session` row
+  directly -- the API itself can no longer produce one, since book choice is
+  automatic and ready-only. 249 non-db + 42 db (was 30), all green except two
+  pre-existing `test_generate.py` failures (`v1_stage2` vs `v2_stage2`, unrelated
+  to this change -- neither `generate.py` nor any prompt file was touched here).
+
+**Decided** (both judgment calls, approved as proposed):
+- No "active book" flag/table -- the newest `ready` book for a grade is used
+  automatically. Keeps the schema untouched; replacing a book for a grade is just
+  uploading the new one, no admin toggle needed.
+- Deleting a book is blocked (409) while *any* session references it, soft-deleted
+  included -- protects eval/thesis history, matches CLAUDE.md's existing
+  never-hard-delete-sessions rule, and sidesteps a `ForeignKeyViolationError` the
+  plain FK would raise anyway.
+
+**Verified:** `pytest -m "not db"` and full `pytest` (Postgres already running) both
+green apart from the two pre-existing, unrelated failures noted above. Confirmed by
+reading `eval/runner.py` (not by running it, no OpenAI key spent) that it takes
+`--book-id` on its own CLI and never touches `POST /sessions`, `POST /books`, or
+any auth dependency -- this module cannot have broken it.
+
+**Next:** frontend still POSTs `{book_id}` to `/sessions` and still routes "New
+chat" to `/upload` -- both now call an API that ignores/rejects that shape, so the
+app is broken end-to-end until module 4. Remaining modules, one at a time: 2)
+`PATCH` endpoint to edit `display_name`/`grade`; 3) admin dashboard (list, upload,
+delete); 4) simplify "New chat" to call `POST /sessions` directly and handle
+"no book for your grade yet"; 5) profile edit screen.
+
+## 2026-09-15 — admin-owned books, module 2: profile edit (display name + grade)
+
+Module 1 made every session's grade/book come from `user.grade` with no per-chat
+override; this closes the other half -- a way to actually change that grade after
+registration. Small module, planned and implemented same session as module 1.
+
+**Bug found while reading `test_auth_routes.py` for this plan, fixed alongside it:**
+`test_new_session_defaults_grade_to_user_grade` still POSTed `json={"book_id":
+...}` to `/sessions` -- a call site module 1's grep missed because it only
+searched `backend/app`, not `backend/tests`. It was silently harmless (FastAPI
+drops JSON fields no parameter binds to) but its docstring's premise -- "falls
+back to user.grade when the request omits one" -- no longer exists now that
+there is no override to omit. Renamed to
+`test_new_sessions_follow_grade_changes_via_profile_edit` and rewritten to
+actually chain modules 1 and 2: register grade 7 -> session resolves the
+grade-7 book -> `PATCH /auth/me` to grade 3 -> a new session resolves a
+grade-3 book.
+
+**Built:**
+- `schemas/user.py`: new `UserUpdate` (`display_name: str | None`,
+  `grade: int | None = Field(ge=1, le=12)`, both optional for partial PATCH).
+  No `email`/`role` field exists on it at all -- not just rejected, there is no
+  way to even submit either through this endpoint.
+- `api/auth.py`: new `PATCH /me`, reusing `get_current_user` and `UserRead`.
+  Applies whichever field was sent, `{}` is a no-op 200. No token re-issue
+  needed -- the JWT carries only `user_id`/`role` (`core/security.py`), never
+  `display_name`/`grade`.
+- 5 new tests in `test_auth_routes.py`: change-both, partial-update, requires-auth
+  (401), invalid-grade (422), and one proving a PATCH body of `{"role": "admin"}`
+  is silently dropped rather than applied -- this is the only endpoint where a
+  non-admin can PATCH their own row, so it's the regression test that keeps it
+  from ever becoming a privilege-escalation path.
+
+**Verified:** Docker Desktop was down for part of this session (all db-marked
+tests failed with `ConnectionRefusedError`, not a code regression -- confirmed
+by the identical non-db count staying green throughout). After the user
+restarted it and `docker compose up -d postgres`, full `pytest`: 294 passed, 2
+failed (same two pre-existing, unrelated `test_generate.py` failures from module
+1 -- `v1_stage2` vs `v2_stage2`), 296 total (249 non-db + 47 db, up from 42:
++5 new, 0 net from the rename).
+
+**Next:** module 3, admin dashboard (list/upload/delete UI). User asked to hold
+all commits/push until every module (1-5) is done, then commit/push together --
+nothing from modules 1-2 is committed yet.
+
+## 2026-09-15 — admin-owned books, module 3: admin dashboard (list, upload, delete)
+
+The screen that actually uses modules 1-2's admin-gated API: an admin-only
+`/admin` page (list, upload, delete) so managing books no longer requires curl.
+
+**Built:**
+- `app/(app)/admin/layout.tsx` (new): role guard -- redirects a non-admin to
+  `/upload` (the parent `(app)/layout.tsx` already blocks rendering until
+  `status === "authed"`, so `user` is guaranteed non-null here).
+- `app/(app)/admin/page.tsx` (new): upload card (file/title/grade, same fields
+  as `upload/page.tsx`, POST /books + poll GET /books/{id} until settled) and
+  a books table (title, class, a local `BOOK_STATUS_META` pill lookup, chunk
+  count, `relativeTime(created_at)`, delete). Deliberately duplicates
+  `upload/page.tsx`'s upload-and-poll logic rather than extracting a shared
+  hook -- that page is deleted outright in module 4, so there would be only
+  one caller left immediately after.
+- `components/sidebar.tsx`: one added link, "Admin dashboard" (Shield icon),
+  rendered only when `user?.role === "admin"`.
+
+**Verified, for real, not just build:** `npm run build` (type-check) clean.
+Then ran both dev servers for real (Postgres already up) and drove an actual
+Chromium browser against them (Playwright, installed on-the-fly via `npx -p
+playwright` into a scratch dir -- not added to the project's own
+`package.json`/lockfile) plus direct `curl` against the live API:
+- Backend, against the real dev DB: fresh student -> `POST /books` 403,
+  `GET /books` 403, `POST /sessions` (grade 9, no book yet) 404
+  `NO_BOOK_FOR_GRADE`. Promoted via `scripts.make_admin` -> `GET /books` 200
+  (listed both real rows, including the actual ingested Class 5 book);
+  uploaded a throwaway PDF (grade 11), watched it reach `status: failed`
+  (deliberately not real PDF bytes), deleted it (204), confirmed gone,
+  re-delete 404. Attempted `DELETE` on the real Class 5 book (which has real
+  sessions) -> 409 `BOOK_HAS_SESSIONS`, confirmed the book still exists
+  afterward untouched.
+- Browser: registered a fresh student, screenshotted `/upload` (no admin
+  link) and confirmed navigating to `/admin` redirects to `/upload`. Logged in
+  as the promoted admin, confirmed the sidebar link appears, clicked into
+  `/admin`, screenshotted the rendered dashboard -- correct data (2 real
+  rows, right status colors), correct layout, matches the app's existing
+  design system. Two benign console 401s logged (the documented
+  refresh-and-retry dance in `lib/api.ts`, not specific to this page -- every
+  authenticated page logs the same thing on a cold token).
+
+**Next:** module 4 (simplify "New chat" to call `POST /sessions` directly,
+delete `/upload`), then module 5 (profile edit screen). Backend
+(`uvicorn`, :8000) and frontend (`next dev`, :3000) dev servers were left
+running from this verification pass; stop them with the port-listener kill if
+not wanted (`lsof -ti:8000,3000 | xargs kill` from Git Bash, or just close the
+terminal). Test accounts `run-verify-admin@example.com` and a few
+`run-verify-*` throwaway student accounts were left in the dev DB -- harmless,
+same category as the pre-existing stray "fake book" row noted in module 1.
+
+## 2026-09-15 — admin-owned books, module 4: automatic "New chat", remove student upload
+
+The last piece that makes modules 1-3 actually usable end to end: students
+never uploaded anything to begin with in the target design, but until now
+"New chat" still pointed at the old upload-a-PDF-and-pick-a-grade page, which
+has been a guaranteed 403 since module 1 (`POST /books` went admin-only).
+
+**Built:**
+- `app/(app)/new/page.tsx` (new, replaces `(app)/upload/page.tsx`, deleted):
+  on mount, `POST /sessions` with no body; success redirects straight to
+  `/chat/{id}`; `NO_BOOK_FOR_GRADE` / `BOOK_NOT_READY` each show a distinct
+  child-friendly message with a manual "Try again" button (no polling).
+- Renamed every `/upload` redirect target to `/new` -- `sidebar.tsx` (the
+  "New chat" link and the delete-session fallback), `app/page.tsx`,
+  `register/page.tsx`, `login/page.tsx`, and module 3's `admin/layout.tsx`
+  non-admin redirect (would otherwise have sent a blocked admin-page visit
+  to a now-deleted route). Judgment call from the plan (renaming vs. leaving
+  the folder named `upload`) went with the rename, as proposed.
+
+**Real bug found and fixed during verification, not just built-and-assumed-
+working:** the mount effect had no reentrancy guard. React 18 Strict Mode
+double-invokes effects in dev, and with no cleanup, a single page visit fired
+two concurrent `POST /sessions` calls -- confirmed live: one login produced
+*two* session rows (`GET /sessions` returned both, timestamps ~0.1ms apart),
+one visible, one a silent orphan sitting in the sidebar with no messages.
+Same class of bug `lib/api.ts`'s `refreshSession()` already had to guard
+against (also documented as a Strict-Mode-double-invoke consequence), just
+page-local this time. Fixed with a `useRef` started-flag around the
+mount-triggered call only -- the "Try again" button's own call is untouched,
+so a deliberate retry still always fires. Re-verified with a fresh account
+after the fix: exactly one session row.
+
+**Verified, for real:** `npm run build` clean (route table shows `/new`, no
+`/upload`). Real browser (Playwright) against the live dev servers + Postgres:
+a grade-12 student (no book exists for that grade) lands on `/new` and sees
+the "No book yet" state, sidebar fully functional around it; visiting `/admin`
+as that same non-admin correctly bounces to `/new`, not a 404. A grade-5
+student (real book) lands straight in a real `/chat/{id}` with no form at
+all; clicking "New chat" again creates a second, genuinely different session
+(confirmed by URL and by the dupe-bug fix above). Backend `pytest`: 294
+passed, same 2 pre-existing `test_generate.py` failures, unchanged -- this
+module touched no backend file.
+
+**Next:** module 5, profile edit screen (the last one). Same dev
+servers/Postgres/leftover test accounts as noted in module 3 are still
+around.
+
+## 2026-09-15 — admin-owned books, module 5: profile edit screen (final module)
+
+The last piece: `PATCH /auth/me` (module 2) has existed since before module 4
+landed, but nothing in the browser could call it. This is that screen, and it
+closes out the whole admin-owned-books change (modules 1-5).
+
+**Built:**
+- `lib/types.ts`: `UserUpdateRequest { display_name?, grade? }`, mirroring
+  `schemas/user.py`'s `UserUpdate` the same way `RegisterRequest` already
+  mirrors its backend schema.
+- `lib/auth-context.tsx`: new `updateProfile()` on `AuthContextValue` --
+  `PATCH /auth/me`, then `setUser()` with the response (no new token needed;
+  the JWT never encoded `display_name`/`grade` to begin with).
+- `app/(app)/profile/page.tsx` (new): email read-only, name + class editable,
+  a caption stating module 1's actual behavior ("new chats use this class,
+  older chats keep theirs") instead of leaving it a surprise, "Save changes"
+  -> `toast.success`/`toast.error` (same pattern as `admin/page.tsx`).
+- `components/sidebar.tsx`: a `Settings`-icon link to `/profile` in the
+  bottom row, next to the theme toggle and logout -- visible to every signed-
+  in user, not gated on role (`PATCH /auth/me` has none).
+
+**Verified, for real, end to end:** `npm run build` clean (`/profile` in the
+route table). Real browser: registered at grade 5, opened `/profile` via the
+new sidebar icon, confirmed name/email/grade all pre-filled correctly.
+Changed grade to 12 and the name, saved, got the toast -- then did a full
+page **reload** (not just a state check) and confirmed both changes actually
+persisted server-side. Clicked "New chat": correctly landed on the
+`NO_BOOK_FOR_GRADE` state, proving `_find_book_for_grade` (module 1) picked up
+the new grade immediately, with no lingering per-session override anywhere.
+Changed grade back to 5 via the same screen, "New chat" resolved the real book
+again. Only 2 console messages the whole run: the one benign refresh-retry
+401 and the one genuine 404 from the deliberate no-book check -- no repeat of
+module 4's duplicate-session bug (its `useRef` guard held). Backend `pytest`:
+294 passed, same 2 pre-existing `test_generate.py` failures, unchanged --
+this module touched no backend file.
+
+**All five modules of the admin-owned-books change are now built and verified
+live, nothing left broken.** Per the user's instruction, none of it has been
+committed -- modules 1-5 sit together in the working tree, ready to
+commit/push as one unit whenever the user chooses. Dev servers (`uvicorn`
+:8000, `next dev` :3000) and Postgres are still running from this session's
+verification passes; several `run-verify-*` throwaway accounts and one stray
+"fake book" (grade 5, status failed, pre-existing since module 1) remain in
+the dev DB -- all harmless, none of it real thesis data, safe to leave or
+clean up via `docker compose down -v` + a fresh `alembic upgrade head` if a
+clean slate is wanted before recording real results.

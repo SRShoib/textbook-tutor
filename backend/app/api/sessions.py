@@ -45,7 +45,7 @@ from app.models.user import User
 from app.pipeline.graph import run_pipeline, run_pipeline_stream
 from app.pipeline.title import generate_title
 from app.schemas.message import MessageCreate, MessageRead
-from app.schemas.session import SessionCreate, SessionRead, SessionUpdate
+from app.schemas.session import SessionRead, SessionUpdate
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -66,18 +66,36 @@ async def _get_owned_session(db: AsyncSession, session_id: uuid.UUID, user_id: u
     return session
 
 
+async def _find_book_for_grade(db: AsyncSession, grade: int) -> Book:
+    """Books are admin-managed and shared, not chosen per chat (2026-09-15
+    decision): a new session always uses the newest ready book for the
+    caller's own account grade. Raises 404 if no book was ever uploaded for
+    that grade, or 409 if one exists but is still processing/failed --
+    reusing _require_ready_book's error code so both cases read as "the
+    book isn't ready yet" from the client's point of view."""
+    book = await db.scalar(
+        select(Book)
+        .where(Book.grade == grade, Book.status == BookStatus.READY)
+        .order_by(Book.created_at.desc())
+        .limit(1)
+    )
+    if book is not None:
+        return book
+
+    any_book_for_grade = await db.scalar(select(Book.id).where(Book.grade == grade).limit(1))
+    if any_book_for_grade is not None:
+        raise AppError("BOOK_NOT_READY", "The book for your class is not ready yet.", status_code=409)
+    raise AppError("NO_BOOK_FOR_GRADE", "No textbook has been added for your class yet.", status_code=404)
+
+
 @router.post("", response_model=SessionRead, status_code=status.HTTP_201_CREATED)
 async def create_session(
-    body: SessionCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Session:
-    book = await db.get(Book, body.book_id)
-    if book is None:
-        raise AppError("BOOK_NOT_FOUND", f"No book with id {body.book_id}.", status_code=404)
+    book = await _find_book_for_grade(db, user.grade)
 
-    grade = body.grade if body.grade is not None else user.grade
-    session = Session(user_id=user.id, book_id=body.book_id, grade=grade)
+    session = Session(user_id=user.id, book_id=book.id, grade=user.grade)
     db.add(session)
     await db.commit()
     await db.refresh(session)

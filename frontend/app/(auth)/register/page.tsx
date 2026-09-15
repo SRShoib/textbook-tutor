@@ -42,7 +42,7 @@ export default function RegisterPage() {
     setSubmitting(true);
     try {
       await register({ email, password, display_name: displayName, grade });
-      router.replace("/upload");
+      router.replace("/new");
     } catch (err) {
       setError(
         err instanceof ApiError

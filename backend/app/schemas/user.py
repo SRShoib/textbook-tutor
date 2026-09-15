@@ -30,6 +30,16 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class UserUpdate(BaseModel):
+    """PATCH /auth/me -- profile edit (2026-09-15 decision, module 2): both
+    fields optional so a partial update (just grade, say) is a no-op on the
+    other. No email/role field exists here at all -- not just rejected --
+    so there is no way to submit either through this endpoint."""
+
+    display_name: str | None = None
+    grade: int | None = Field(default=None, ge=1, le=12)
+
+
 class UserRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

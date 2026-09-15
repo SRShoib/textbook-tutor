@@ -39,7 +39,7 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login({ email, password });
-      router.replace("/upload");
+      router.replace("/new");
     } catch (err) {
       setError(
         err instanceof ApiError

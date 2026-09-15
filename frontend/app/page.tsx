@@ -9,7 +9,7 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    if (status === "authed") router.replace("/upload");
+    if (status === "authed") router.replace("/new");
     if (status === "anon") router.replace("/login");
   }, [status, router]);
 

@@ -202,24 +202,95 @@ async def test_me_requires_login_when_anonymous_disallowed(client):
 
 
 @pytest.mark.asyncio
-async def test_new_session_defaults_grade_to_user_grade(client, db_session):
-    """The other half of CLAUDE.md's "on register, grade becomes the
-    default for new sessions" — api/sessions.py's create_session falls back
-    to user.grade when the request omits one."""
+async def test_new_sessions_follow_grade_changes_via_profile_edit(client, db_session):
+    """Ties modules 1 and 2 together: a session's grade always comes from
+    the account (api/sessions.py's _find_book_for_grade), and PATCH /auth/me
+    is the only way to change that account's grade -- there is no
+    per-session override (2026-09-15 decision)."""
     from app.models.book import Book, BookStatus
 
     register = await client.post("/api/v1/auth/register", json=_register_body(email="ivy@example.com", grade=7))
     access_token = register.json()["access_token"]
+    headers = {"Authorization": f"Bearer {access_token}"}
 
-    book = Book(title="Test Book", grade=7, status=BookStatus.READY, chunk_count=1, file_hash="test-hash-ivy")
-    db_session.add(book)
+    book7 = Book(title="Grade 7 Book", grade=7, status=BookStatus.READY, chunk_count=1, file_hash="test-hash-ivy-7")
+    db_session.add(book7)
     await db_session.commit()
-    await db_session.refresh(book)
 
-    resp = await client.post(
-        "/api/v1/sessions",
-        json={"book_id": str(book.id)},
-        headers={"Authorization": f"Bearer {access_token}"},
+    first_session = await client.post("/api/v1/sessions", headers=headers)
+    assert first_session.status_code == 201
+    assert first_session.json()["grade"] == 7
+    assert first_session.json()["book_id"] == str(book7.id)
+
+    patch = await client.patch("/api/v1/auth/me", json={"grade": 3}, headers=headers)
+    assert patch.status_code == 200
+    assert patch.json()["grade"] == 3
+
+    book3 = Book(title="Grade 3 Book", grade=3, status=BookStatus.READY, chunk_count=1, file_hash="test-hash-ivy-3")
+    db_session.add(book3)
+    await db_session.commit()
+
+    second_session = await client.post("/api/v1/sessions", headers=headers)
+    assert second_session.status_code == 201
+    assert second_session.json()["grade"] == 3
+    assert second_session.json()["book_id"] == str(book3.id)
+
+
+@pytest.mark.asyncio
+async def test_update_me_changes_display_name_and_grade(client):
+    register = await client.post("/api/v1/auth/register", json=_register_body(email="update-both@example.com"))
+    headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
+
+    resp = await client.patch(
+        "/api/v1/auth/me", json={"display_name": "New Name", "grade": 8}, headers=headers
     )
-    assert resp.status_code == 201
-    assert resp.json()["grade"] == 7
+    assert resp.status_code == 200
+    assert resp.json()["display_name"] == "New Name"
+    assert resp.json()["grade"] == 8
+
+    me = await client.get("/api/v1/auth/me", headers=headers)
+    assert me.json()["display_name"] == "New Name"
+    assert me.json()["grade"] == 8
+
+
+@pytest.mark.asyncio
+async def test_update_me_partial_update_leaves_other_field(client):
+    register = await client.post(
+        "/api/v1/auth/register", json=_register_body(email="update-partial@example.com", display_name="Original")
+    )
+    headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
+
+    resp = await client.patch("/api/v1/auth/me", json={"grade": 2}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["grade"] == 2
+    assert resp.json()["display_name"] == "Original"
+
+
+@pytest.mark.asyncio
+async def test_update_me_requires_auth(client):
+    get_settings().allow_anonymous = False
+    resp = await client.patch("/api/v1/auth/me", json={"grade": 5})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_update_me_rejects_invalid_grade(client):
+    register = await client.post("/api/v1/auth/register", json=_register_body(email="update-invalid@example.com"))
+    headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
+
+    resp = await client.patch("/api/v1/auth/me", json={"grade": 13}, headers=headers)
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_me_ignores_unknown_fields(client):
+    """This is the only endpoint where a non-admin can PATCH their own user
+    row -- proving an unrecognised field like `role` is silently dropped
+    (UserUpdate has no such field to bind it to) rather than applied is what
+    keeps this from becoming a privilege-escalation path."""
+    register = await client.post("/api/v1/auth/register", json=_register_body(email="update-role@example.com"))
+    headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
+
+    resp = await client.patch("/api/v1/auth/me", json={"role": "admin"}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["role"] == "student"

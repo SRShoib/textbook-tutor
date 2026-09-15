@@ -4,14 +4,6 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class SessionCreate(BaseModel):
-    book_id: uuid.UUID
-    # Optional: falls back to the current user's registered grade
-    # (CLAUDE.md: "On register, grade is stored on the user and becomes the
-    # default for new sessions"). Still overridable per-session.
-    grade: int | None = None
-
-
 class SessionUpdate(BaseModel):
     """PATCH /sessions/{id} -- manual rename only, for now."""
 

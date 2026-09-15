@@ -31,6 +31,11 @@ export interface RegisterRequest {
   grade: number;
 }
 
+export interface UserUpdateRequest {
+  display_name?: string;
+  grade?: number;
+}
+
 export interface LoginRequest {
   email: string;
   password: string;

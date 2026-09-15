@@ -20,7 +20,7 @@ import {
   type ReactNode,
 } from "react";
 import { apiFetch, refreshSession, setAccessToken } from "./api";
-import type { LoginRequest, RegisterRequest, TokenResponse, UserRead } from "./types";
+import type { LoginRequest, RegisterRequest, TokenResponse, UserRead, UserUpdateRequest } from "./types";
 
 type AuthStatus = "loading" | "authed" | "anon";
 
@@ -30,6 +30,7 @@ interface AuthContextValue {
   login: (credentials: LoginRequest) => Promise<void>;
   register: (data: RegisterRequest) => Promise<void>;
   logout: () => Promise<void>;
+  updateProfile: (data: UserUpdateRequest) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -100,9 +101,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const updateProfile = useCallback(async (data: UserUpdateRequest) => {
+    const updated = await apiFetch<UserRead>("/auth/me", { method: "PATCH", body: data });
+    setUser(updated);
+  }, []);
+
   const value = useMemo<AuthContextValue>(
-    () => ({ user, status, login, register, logout }),
-    [user, status, login, register, logout],
+    () => ({ user, status, login, register, logout, updateProfile }),
+    [user, status, login, register, logout, updateProfile],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

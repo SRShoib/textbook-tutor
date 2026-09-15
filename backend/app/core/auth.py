@@ -82,3 +82,13 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
 
 async def get_current_user_id(user: User = Depends(get_current_user)) -> uuid.UUID:
     return user.id
+
+
+async def require_admin(user: User = Depends(get_current_user)) -> User:
+    """Gates book management (api/books.py) to role=admin. Reads user.role
+    off the freshly-fetched User row, not the JWT's role claim, so promoting
+    an account with scripts/make_admin.py takes effect on that user's very
+    next request instead of only after their token is reissued."""
+    if user.role != UserRole.ADMIN:
+        raise AppError("FORBIDDEN", "This action requires an admin account.", status_code=403)
+    return user

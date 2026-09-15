@@ -5,15 +5,15 @@
  * every authenticated screen. Session list, rename, delete, and
  * active-session highlighting -- Phase 7 module 4.
  * Why it refetches on every route change (usePathname in the effect deps)
- * instead of sharing state with the upload page: it's one cheap GET, and it
- * means a session created by /upload just shows up the moment you land on
- * /chat/{id}, with no cross-page state plumbing needed.
+ * instead of sharing state some other way: it's one cheap GET, and it means
+ * a session created by /new just shows up the moment you land on /chat/{id},
+ * with no cross-page state plumbing needed.
  */
 
 import { useEffect, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { LogOut, Pencil, Plus, Trash2, X } from "lucide-react";
+import { LogOut, Pencil, Plus, Settings, Shield, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -110,7 +110,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       await apiFetch<void>(`/sessions/${session.id}`, { method: "DELETE" });
       setSessions((prev) => prev.filter((s) => s.id !== session.id));
       if (params.sessionId === session.id) {
-        router.push("/upload");
+        router.push("/new");
       }
     } catch (err) {
       window.alert(err instanceof ApiError ? err.message : "Could not delete this conversation.");
@@ -141,9 +141,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </Button>
       </div>
 
-      <div className="p-4">
+      <div className="flex flex-col gap-2 p-4">
         <Button
-          render={<Link href="/upload" />}
+          render={<Link href="/new" />}
           nativeButton={false}
           variant="secondary"
           size="lg"
@@ -152,6 +152,18 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           <Plus className="size-4.5" />
           New chat
         </Button>
+        {user?.role === "admin" && (
+          <Button
+            render={<Link href="/admin" />}
+            nativeButton={false}
+            variant="ghost"
+            size="lg"
+            className="w-full justify-start gap-2 text-base"
+          >
+            <Shield className="size-4.5" />
+            Admin dashboard
+          </Button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 pb-3">
@@ -229,6 +241,15 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           {user?.display_name}
         </span>
         <div className="flex shrink-0 items-center gap-1">
+          <Button
+            render={<Link href="/profile" />}
+            nativeButton={false}
+            variant="ghost"
+            size="icon"
+            aria-label="Profile settings"
+          >
+            <Settings className="size-4" />
+          </Button>
           <ThemeToggle />
           <Button variant="ghost" size="icon" aria-label="Log out" onClick={handleLogout}>
             <LogOut className="size-4" />

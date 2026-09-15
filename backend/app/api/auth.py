@@ -44,7 +44,7 @@ from app.core.security import (
 )
 from app.models.refresh_token import RefreshToken
 from app.models.user import User, UserRole
-from app.schemas.user import LoginRequest, RegisterRequest, TokenResponse, UserRead
+from app.schemas.user import LoginRequest, RegisterRequest, TokenResponse, UserRead, UserUpdate
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -196,4 +196,24 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
 
 @router.get("/me", response_model=UserRead)
 async def me(user: User = Depends(get_current_user)) -> User:
+    return user
+
+
+@router.patch("/me", response_model=UserRead)
+async def update_me(
+    body: UserUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Profile edit (2026-09-15 decision, module 2): the only way to change
+    grade after registration -- there is no per-session override (module 1).
+    Nothing about the access token goes stale here: it carries only
+    user_id/role (create_access_token, core/security.py), never
+    display_name/grade."""
+    if body.display_name is not None:
+        user.display_name = body.display_name
+    if body.grade is not None:
+        user.grade = body.grade
+    await db.commit()
+    await db.refresh(user)
     return user
